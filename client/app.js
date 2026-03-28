@@ -5,28 +5,35 @@ let currentGameId = null;
 // --- API HTTP ---
 
 async function register() {
+    const regex = /^(?=.*[A-Z])(?=.*\d)(?=.*[\W_]).{8,}$/;
+
     const user = document.getElementById('username').value;
     const pass = document.getElementById('password').value;
     const conf_pass = document.getElementById('confirm-password').value;
-    const res = await fetch('/api/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: user, password: pass, confirm_password: conf_pass})
-    });
-    const data = await res.json();
-     if (data.status === "ok") {
-        document.getElementById('register-section').style.display = 'none';
-        document.getElementById('auth-section').style.display = 'block';
-        document.getElementById('auth-msg').innerText = data.message;
+
+    if (regex.test(password)) {
+        const res = await fetch('/api/register', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username: user, password: pass, confirm_password: conf_pass})
+        });
+        const data = await res.json();
+        if (data.status === "ok") {
+            document.getElementById('register-section').style.display = 'none';
+            document.getElementById('auth-section').style.display = 'block';
+            document.getElementById('auth-msg').innerText = data.message;
+        } else {
+            document.getElementById('register-msg').innerText = data.message;
+        }
     } else {
-        document.getElementById('register-msg').innerText = data.message;
+        document.getElementById('register-msg').innerText = "Your password is not strong enough. Please select a password that is least 8 characters and that contains at least one upper-case character, 1 number and 1 special character.";
     }
 }
 
 async function goRegister() {
     document.getElementById('auth-section').style.display = 'none';
     document.getElementById('register-section').style.display = 'flex';
-    document.getElementById('register-msg').innerText = "Please enter a username and a password, with its confirmation.";
+    document.getElementById('register-msg').innerText = "Please enter a username and a password, then confirm the password.\nThe password must be at least 8 characters long and must contain at least one upper-case character, 1 number and 1 special character.";
 }
 
 async function login() {
