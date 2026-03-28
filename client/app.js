@@ -7,26 +7,33 @@ let currentGameId = null;
 async function register() {
     const regex = /^(?=.*[A-Z])(?=.*\d)(?=.*[\W_]).{8,}$/;
 
-    const user = document.getElementById('username').value;
-    const pass = document.getElementById('password').value;
+    const user = document.getElementById('reg-username').value;
+    const pass = document.getElementById('reg-password').value;
     const conf_pass = document.getElementById('confirm-password').value;
 
-    if (regex.test(password)) {
-        const res = await fetch('/api/register', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username: user, password: pass, confirm_password: conf_pass})
-        });
-        const data = await res.json();
-        if (data.status === "ok") {
-            document.getElementById('register-section').style.display = 'none';
-            document.getElementById('auth-section').style.display = 'block';
-            document.getElementById('auth-msg').innerText = data.message;
-        } else {
-            document.getElementById('register-msg').innerText = data.message;
-        }
+    if (pass !== conf_pass) {
+        document.getElementById('register-msg').innerText = "Passwords do not match.";
+        return;
+    }
+
+    if (!regex.test(pass)) {
+        document.getElementById('register-msg').innerText =
+            "Your password is not strong enough. It must be at least 8 characters, contain at least 1 uppercase letter, 1 number and 1 special character.";
+        return;
+    }
+
+    const res = await fetch('/api/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: user, password: pass, confirm_password: conf_pass})
+    });
+    const data = await res.json();
+    if (data.status === "ok") {
+        document.getElementById('register-section').style.display = 'none';
+        document.getElementById('auth-section').style.display = 'block';
+        document.getElementById('auth-msg').innerText = data.message;
     } else {
-        document.getElementById('register-msg').innerText = "Your password is not strong enough. Please select a password that is least 8 characters and that contains at least one upper-case character, 1 number and 1 special character.";
+        document.getElementById('register-msg').innerText = data.message;
     }
 }
 
