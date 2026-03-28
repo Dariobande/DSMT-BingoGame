@@ -25,7 +25,7 @@ h2, h3 {
 }
 
 /* Auth and Lobby Sections */
-#auth-section, #game-section {
+#auth-section, #game-section, #register-section {
     background: white;
     padding: 30px;
     border-radius: 10px;
@@ -33,6 +33,21 @@ h2, h3 {
     text-align: center;
     width: 100%;
     max-width: 600px;
+}
+
+#register-section {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+#register-section input {
+    width: 100%;
+}
+
+#register-section button {
+    width: auto;
+    align-self: center; /* oppure flex-start */
 }
 
 input[type="text"], input[type="password"] {
