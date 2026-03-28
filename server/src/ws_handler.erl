@@ -1,6 +1,8 @@
 -module(ws_handler).
 -behaviour(cowboy_websocket).
 
+-include("../include/bingo_records.hrl").
+
 -export([init/2, websocket_init/1, websocket_handle/2, websocket_info/2]).
 
 %% State of the WS connection
