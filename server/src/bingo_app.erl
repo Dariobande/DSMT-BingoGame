@@ -1,11 +1,10 @@
 -module(bingo_app).
--behaviour(application).
+-export([start/1]). %% Ora accetta la porta come parametro!
 
--export([start/2, stop/1]).
+start(Port) ->
+    %% Assicuriamoci che Cowboy e dipendenze siano avviati
+    application:ensure_all_started(cowboy),
 
-start(_Type, _Args) ->
-    %% Define routing for Cowboy
-    %% We route HTTP requests to http_handler and WebSocket connections to ws_handler
     Dispatch = cowboy_router:compile([
         {'_', [
             {"/api/register", http_handler, [register]},
@@ -14,14 +13,10 @@ start(_Type, _Args) ->
         ]}
     ]),
 
-    %% Start Cowboy listener on port 8080 (Nginx will proxy traffic here)
-    {ok, _} = cowboy:start_clear(bingo_http_listener,
-        [{port, 8080}],
+    %% Usa la porta passata come parametro
+    {ok, _} = cowboy:start_clear(list_to_atom("bingo_listener_" ++ integer_to_list(Port)),
+        [{port, Port}],
         #{env => #{dispatch => Dispatch}}
     ),
     
-    %% Start the top-level supervisor (assuming bingo_sup is implemented)
-    bingo_sup:start_link().
-
-stop(_State) ->
-    ok.
+    io:format("~n[INFO] Server avviato sulla porta ~p!~n", [Port]).

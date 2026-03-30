@@ -1,0 +1,3 @@
+server/ebin
+server/Mnesia.*
+.DS_Store

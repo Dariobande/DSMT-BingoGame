@@ -1,21 +1,20 @@
 # Makefile
 
-REBAR = rebar3
-
-.PHONY: all compile clean shell cluster
+.PHONY: all compile clean clean-db
 
 all: compile
 
 compile:
-	$(REBAR) compile
+	erlc -I include/ \
+	-pa deps/jsx/ebin \
+	-pa deps/cowboy/ebin \
+	-pa deps/cowboy/deps/cowlib/ebin \
+	-pa deps/cowboy/deps/ranch/ebin \
+	-o ebin/ src/*.erl
 
 clean:
-	$(REBAR) clean
-	rm -rf _build
-
-shell: compile
-	$(REBAR) shell
+	rm ebin/*.beam
 
 # Comando utility per pulire il database locale (Mnesia) se serve resettare
 clean-db:
-	rm -rf Mnesia.*
+	rm -r Mnesia.*

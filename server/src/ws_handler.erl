@@ -44,17 +44,29 @@ handle_client_action(<<"create_game">>, Data, State) ->
 %% Join an existing game
 handle_client_action(<<"join_game">>, Data, State) ->
     Username = binary_to_list(maps:get(<<"username">>, Data)),
-    %% In a real scenario, you'd lookup the GamePid via a registry (like gproc or pg) using GameId
-    %% Assuming GamePid is resolved here:
-    %% game_server:join(GamePid, Username, self()),
-    Reply = jsx:encode(#{<<"event">> => <<"joined">>}),
-    {reply, {text, Reply}, State#ws_state{username = Username}}; %% Add game_pid
+    GameId = binary_to_list(maps:get(<<"game_id">>, Data)),
+
+    %% Search for the game process using the global registry
+    case global:whereis_name(GameId) of
+        undefined ->
+            %% The game was not found, send an error back to the client
+            Reply = jsx:encode(#{<<"event">> => <<"error">>, <<"reason">> => <<"game_not_found">>}),
+            {reply, {text, Reply}, State};
+            
+        GamePid ->
+            %% Found the game, join it
+            game_server:join(GamePid, Username, self()),
+            Reply = jsx:encode(#{<<"event">> => <<"joined">>}),
+            
+            %% Update state of the WS connection with the username and game PID
+            {reply, {text, Reply}, State#ws_state{username = Username, game_pid = GamePid}}
+    end;
 
 %% Buy a card
 handle_client_action(<<"buy_card">>, _Data, State = #ws_state{username = User, game_pid = Pid}) ->
     case game_server:buy_card(Pid, User) of
-        {ok, Card} ->
-            Reply = jsx:encode(#{<<"event">> => <<"card_bought">>, <<"grid">> => Card#card.grid}),
+        {ok, Card, Balance} ->
+            Reply = jsx:encode(#{<<"event">> => <<"card_bought">>, <<"grid">> => Card#card.grid, <<"balance">> => Balance}),
             {reply, {text, Reply}, State};
         {error, Reason} ->
             Reply = jsx:encode(#{<<"event">> => <<"error">>, <<"reason">> => atom_to_binary(Reason, utf8)}),
@@ -72,8 +84,8 @@ handle_client_action(<<"claim_win">>, Data, State = #ws_state{username = User, g
     CardId = maps:get(<<"card_id">>, Data),
     
     case game_server:claim_win(Pid, User, Combination, CardId) of
-        {ok, Prize} ->
-            Reply = jsx:encode(#{<<"event">> => <<"win_accepted">>, <<"prize">> => Prize}),
+        {ok, Prize, Balance} ->
+            Reply = jsx:encode(#{<<"event">> => <<"win_accepted">>, <<"prize">> => Prize, <<"balance">> => Balance}),
             {reply, {text, Reply}, State};
         {error, Reason} ->
             Reply = jsx:encode(#{<<"event">> => <<"error">>, <<"reason">> => atom_to_binary(Reason, utf8)}),

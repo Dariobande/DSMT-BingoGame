@@ -37,7 +37,7 @@ async function register() {
     }
 }
 
-async function goRegister() {
+function goRegister() {
     document.getElementById('auth-section').style.display = 'none';
     document.getElementById('register-section').style.display = 'flex';
     document.getElementById('register-msg').innerText = "Please enter a username and a password, then confirm the password.\nThe password must be at least 8 characters long and must contain at least one upper-case character, 1 number and 1 special character.";
@@ -95,14 +95,19 @@ function handleServerMessage(msg) {
             currentGameId = msg.game_id;
             document.getElementById('play-area').style.display = 'block';
             document.getElementById('btn-start').style.display = 'inline-block'; // Solo il creatore vede Start
+            document.getElementById('cards-container').innerHTML = '';
+            document.getElementById('last-number').innerText = '-';
             logMessage(`Game ${currentGameId} created.`);
             break;
         case "joined":
             document.getElementById('play-area').style.display = 'block';
+            document.getElementById('cards-container').innerHTML = '';
+            document.getElementById('last-number').innerText = '-';
             logMessage(`Joined game successfully.`);
             break;
         case "card_bought":
             renderCard(msg.grid);
+            document.getElementById('balance-display').innerText = msg.balance;
             break;
         case "game_started":
             logMessage(`Game started! Total pot: ${msg.pot}`);
@@ -110,6 +115,9 @@ function handleServerMessage(msg) {
         case "number_drawn":
             document.getElementById('last-number').innerText = msg.number;
             logMessage(`Number extracted: ${msg.number}`);
+            break;
+        case "win_accepted":
+            document.getElementById('balance-display').innerText = msg.balance;
             break;
         case "winner_announced":
             logMessage(`${msg.user} won ${msg.combination}! Prize: ${msg.prize}`);

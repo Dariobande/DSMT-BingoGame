@@ -4,6 +4,7 @@
 -record(user, {
     username,       %% Chiave primaria
     password_hash,  %% Password criptata
+    salt,
     balance         %% Denaro in-game
 }).
 

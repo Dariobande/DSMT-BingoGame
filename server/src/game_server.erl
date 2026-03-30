@@ -29,7 +29,7 @@
 
 %% Starts a new game process
 start_link(GameId, Creator) ->
-    gen_server:start_link(?MODULE, [GameId, Creator], []).
+    gen_server:start_link({global, GameId}, ?MODULE, [GameId, Creator], []).
 
 %% User joins the game. WsPid is the Cowboy WebSocket process PID for broadcasting.
 join(GamePid, Username, WsPid) ->
@@ -85,14 +85,14 @@ handle_call({buy_card, Username}, _From, State = #state{game_id = GameId, pot = 
                 CardId = make_ref(),
                 NewCard = #card{card_id = CardId, user_id = Username, game_id = GameId, grid = Numbers, combinations_won = []},
                 mnesia:write(NewCard),
-                {ok, NewCard};
+                {ok, NewCard, NewBalance};
             CardsCount >= ?MAX_CARDS -> {error, max_cards_reached};
             true -> {error, insufficient_funds}
         end
     end,
     case mnesia:transaction(F) of
-        {atomic, {ok, Card}} -> 
-            {reply, {ok, Card}, State#state{pot = Pot + ?CARD_COST}};
+        {atomic, {ok, Card, Balance}} -> 
+            {reply, {ok, Card, Balance}, State#state{pot = Pot + ?CARD_COST}};
         {atomic, Error} -> 
             {reply, Error, State}
     end;
@@ -120,7 +120,7 @@ handle_call({claim_win, Username, Comb, CardId}, _From, State = #state{status = 
                 true ->
                     %% Payout logic (distribute the pot % based on combination)
                     Prize = calculate_prize(Comb, State#state.pot),
-                    payout(Username, Prize),
+                    NewBalance = payout(Username, Prize),
                     
                     %% Broadcast the winner to everyone
                     broadcast(State#state.players, {winner, Username, Comb, Prize}),
@@ -131,9 +131,9 @@ handle_call({claim_win, Username, Comb, CardId}, _From, State = #state{status = 
                     if Comb =:= tombola ->
                         update_db_game_status(State#state.game_id, finished),
                         broadcast(State#state.players, game_over),
-                        {stop, normal, ok, State#state{won_combinations = NewWon, status = finished}};
+                        {stop, normal, {ok, Prize, NewBalance}, State#state{won_combinations = NewWon, status = finished}};
                     true ->
-                        {reply, {ok, Prize}, State#state{won_combinations = NewWon}}
+                        {reply, {ok, Prize, NewBalance}, State#state{won_combinations = NewWon}}
                     end;
                 false ->
                     {reply, {error, invalid_claim}, State}
@@ -216,6 +216,10 @@ calculate_prize(tombola, Pot) -> erlang:trunc(Pot * 0.30).
 payout(Username, Amount) ->
     F = fun() ->
         [User] = mnesia:read(user, Username),
-        mnesia:write(User#user{balance = User#user.balance + Amount})
+        NewBalance = User#user.balance + Amount,
+        mnesia:write(User#user{balance = NewBalance}),
+        NewBalance
     end,
-    mnesia:transaction(F).
+
+    {atomic, Balance} = mnesia:transaction(F),
+    Balance.
