@@ -20,6 +20,11 @@ init_cluster_db(Nodes) ->
         {attributes, record_info(fields, user)},
         {disc_copies, Nodes}
     ]),
+
+    mnesia:create_table(session, [
+        {attributes, record_info(fields, session)},
+        {ram_copies, Nodes}
+    ]),
     
     mnesia:create_table(game, [
         {attributes, record_info(fields, game)},
@@ -28,7 +33,7 @@ init_cluster_db(Nodes) ->
     
     mnesia:create_table(card, [
         {attributes, record_info(fields, card)},
-        {disc_copies, Nodes}
+        {ram_copies, Nodes}
     ]),
 
     %% Attesa che le tabelle siano pronte e sincronizzate

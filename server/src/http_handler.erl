@@ -50,7 +50,13 @@ handle_auth(login, Username, Password) ->
                 %% Chiamiamo verify_password estraendo hash e salt direttamente dal record
                 case verify_password(Password, User#user.password_hash, User#user.salt) of
                     true ->
-                        #{<<"status">> => <<"ok">>, <<"balance">> => User#user.balance};
+                        %% 1. Generiamo un Token inattaccabile di 16 byte
+                        TokenBin = crypto:strong_rand_bytes(16),
+                        TokenB64 = base64:encode(TokenBin),
+                        
+                        %% 2. Lo salviamo nel database associato a questo utente
+                        mnesia:write(#session{token = TokenB64, username = Username}),
+                        #{<<"status">> => <<"ok">>, <<"balance">> => User#user.balance, <<"token">> => TokenB64};
                     false ->
                         #{<<"status">> => <<"error">>, <<"message">> => <<"wrong_password">>}
                 end;

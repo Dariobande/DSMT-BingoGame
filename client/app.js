@@ -1,6 +1,7 @@
 let currentUser = null;
 let ws = null;
 let currentGameId = null;
+let token = null;
 
 // --- API HTTP ---
 
@@ -30,7 +31,7 @@ async function register() {
     const data = await res.json();
     if (data.status === "ok") {
         document.getElementById('register-section').style.display = 'none';
-        document.getElementById('auth-section').style.display = 'block';
+        document.getElementById('auth-section').style.display = 'flex';
         document.getElementById('auth-msg').innerText = data.message;
     } else {
         document.getElementById('register-msg').innerText = data.message;
@@ -59,6 +60,7 @@ async function login() {
         document.getElementById('game-section').style.display = 'block';
         document.getElementById('user-display').innerText = currentUser;
         document.getElementById('balance-display').innerText = data.balance;
+        token = data.token;
         
         // Inizializza la connessione WebSocket
         connectWebSocket();
@@ -75,6 +77,11 @@ function connectWebSocket() {
 
     ws.onopen = () => {
         logMessage("Connected to server.");
+
+        ws.send(JSON.stringify({
+            action: "authenticate",
+            token: token
+        }));
     };
 
     ws.onmessage = (event) => {
@@ -91,17 +98,48 @@ function connectWebSocket() {
 
 function handleServerMessage(msg) {
     switch (msg.event) {
+        case "auth_success":
+            const lobbyDiv = document.getElementById('lobby-games-list');
+            lobbyDiv.replaceChildren();
+            
+            if (msg.open_games.length === 0) {
+                p = document.createElement('p');
+                p.innerText = "There are no open matches! Create a new one";
+                lobbyDiv.appendChild(p);
+            } else {
+                // For each game, create a row with the creator's name and a Join button
+                msg.open_games.forEach(game => {
+                    const gameRow = document.createElement('div');
+                    gameRow.style.marginBottom = "10px";
+                    
+                    const infoText = document.createElement('span');
+                    const creator = String.fromCodePoint(...game.creator);
+                    infoText.innerText = `Game created by ${creator}`;
+                    
+                    const btn = document.createElement('button');
+                    btn.innerText = 'Join';
+                    btn.onclick = () => joinGame(game.game_id);
+                    
+                    gameRow.appendChild(infoText);
+                    gameRow.appendChild(btn);
+                    lobbyDiv.appendChild(gameRow);
+                });
+            }
+            break;
         case "game_created":
-            currentGameId = msg.game_id;
+            document.getElementById('btn-create').style.display = 'none';
             document.getElementById('play-area').style.display = 'block';
-            document.getElementById('btn-start').style.display = 'inline-block'; // Solo il creatore vede Start
-            document.getElementById('cards-container').innerHTML = '';
+            document.getElementById('btn-start').style.display = 'inline-block';
+            document.getElementById('cards-container').replaceChildren();
+            document.getElementById('lobby-games-list').replaceChildren();
             document.getElementById('last-number').innerText = '-';
-            logMessage(`Game ${currentGameId} created.`);
+            logMessage(`Game created.`);
             break;
         case "joined":
+            document.getElementById('btn-create').style.display = 'none';
             document.getElementById('play-area').style.display = 'block';
-            document.getElementById('cards-container').innerHTML = '';
+            document.getElementById('cards-container').replaceChildren();
+            document.getElementById('lobby-games-list').replaceChildren();
             document.getElementById('last-number').innerText = '-';
             logMessage(`Joined game successfully.`);
             break;
@@ -134,13 +172,11 @@ function handleServerMessage(msg) {
 // --- AZIONI GIOCO ---
 
 function createGame() {
-    const gameId = document.getElementById('game-id-input').value || `game_${Date.now()}`;
-    ws.send(JSON.stringify({ action: "create_game", username: currentUser, game_id: gameId }));
+    ws.send(JSON.stringify({ action: "create_game" }));
 }
 
-function joinGame() {
-    const gameId = document.getElementById('game-id-input').value;
-    ws.send(JSON.stringify({ action: "join_game", username: currentUser, game_id: gameId }));
+function joinGame(gameId) {
+    ws.send(JSON.stringify({ action: "join_game", game_id: gameId }));
 }
 
 function buyCard() {
@@ -178,5 +214,7 @@ function renderCard(grid) {
 
 function logMessage(text) {
     const log = document.getElementById('game-log');
-    log.innerHTML = text + "<br>" + log.innerHTML;
+    p = document.createElement('p');
+    p.innerText = text;
+    log.prepend(p);
 }

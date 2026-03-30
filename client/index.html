@@ -30,10 +30,10 @@
         <h2>Welcome, <span id="user-display"></span>! Balance: <span id="balance-display"></span></h2>
         
         <div id="lobby">
-            <input type="text" id="game-id-input" placeholder="Game ID">
-            <button onclick="createGame()">Create Game</button>
-            <button onclick="joinGame()">Join Game</button>
+            <button id="btn-create" onclick="createGame()">Create a Game</button>
         </div>
+
+        <div id="lobby-games-list"></div>
 
         <div id="play-area" style="display:none;">
             <h3>Last Drawn Number: <span id="last-number" style="font-size: 2em; color: red;">-</span></h3>

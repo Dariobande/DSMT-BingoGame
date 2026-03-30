@@ -8,6 +8,8 @@
     balance         %% Denaro in-game
 }).
 
+-record(session, {token, username}).
+
 %% Tabella Partite
 -record(game, {
     game_id,        %% Chiave primaria (es. UUID o stringa)

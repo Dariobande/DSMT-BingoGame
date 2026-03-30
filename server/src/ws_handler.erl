@@ -29,21 +29,47 @@ websocket_handle(_Data, State) ->
 
 %% --- Client Actions ---
 
+%% Authenticate the user using the token provided after login
+handle_client_action(<<"authenticate">>, Data, State) ->
+    Token = maps:get(<<"token">>, Data),
+    %% Andiamo a cercare il token nel database
+    case mnesia:dirty_read(session, Token) of
+        [#session{username = Username}] ->
+            AvailableGames = find_open_games(),
+            %% Token valido! Promuoviamo lo State associandogli il VERO username
+            Reply = jsx:encode(#{ <<"event">> => <<"auth_success">>, <<"open_games">> => AvailableGames }),
+            {reply, {text, Reply}, State#ws_state{username = Username}};
+        [] ->
+            %% Token falso o inesistente: Cacciamo l'impostore chiudendo la connessione
+            {stop, State}
+    end;
+
+%% 2. LA GUARDIA SVIZZERA (Protezione delle altre funzioni)
+%% Se un client prova a mandare "claim_win" o "buy_card" ma ha ancora username = undefined...
+handle_client_action(_Action, _Data, State = #ws_state{username = undefined}) ->
+    %% ...lo blocchiamo restituendo un errore!
+    Reply = jsx:encode(#{<<"event">> => <<"error">>, <<"message">> => <<"Non sei autenticato!">>}),
+    {reply, {text, Reply}, State};
+
 %% Create a new game
-handle_client_action(<<"create_game">>, Data, State) ->
-    Username = binary_to_list(maps:get(<<"username">>, Data)),
-    GameId = binary_to_list(maps:get(<<"game_id">>, Data)),
+handle_client_action(<<"create_game">>, _Data, State) ->
+    %% prendi l'username associato allo stato del WS
+    Username = State#ws_state.username,
+    
+    %% Genera un GameId unico 
+    RawBytes = crypto:strong_rand_bytes(8),
+    GameId = binary:encode_hex(RawBytes),
     
     %% Start the game_server process locally on this node
     {ok, GamePid} = game_server:start_link(GameId, Username),
     game_server:join(GamePid, Username, self()),
     
-    Reply = jsx:encode(#{<<"event">> => <<"game_created">>, <<"game_id">> => list_to_binary(GameId)}),
+    Reply = jsx:encode(#{<<"event">> => <<"game_created">>, <<"game_id">> => GameId}),
     {reply, {text, Reply}, State#ws_state{username = Username, game_pid = GamePid}};
 
 %% Join an existing game
 handle_client_action(<<"join_game">>, Data, State) ->
-    Username = binary_to_list(maps:get(<<"username">>, Data)),
+    Username = State#ws_state.username,
     GameId = binary_to_list(maps:get(<<"game_id">>, Data)),
 
     %% Search for the game process using the global registry
@@ -91,6 +117,26 @@ handle_client_action(<<"claim_win">>, Data, State = #ws_state{username = User, g
             Reply = jsx:encode(#{<<"event">> => <<"error">>, <<"reason">> => atom_to_binary(Reason, utf8)}),
             {reply, {text, Reply}, State}
     end.
+
+%% Trova tutte le partite in attesa e le formatta per il JSON
+find_open_games() ->
+    %% 1. Creiamo un "identikit" della partita che stiamo cercando.
+    %% Il simbolo '_' significa "non mi importa cosa c'è in questo campo".
+    Pattern = #game{status = waiting, _ = '_'},
+    
+    %% 2. Chiediamo a Mnesia di trovare tutti i record che matchano
+    OpenGamesRecords = mnesia:dirty_match_object(game, Pattern),
+    LimitedGames = lists:sublist(OpenGamesRecords, 10),
+    
+    %% 3. jsx non sa leggere i record di Erlang, quindi li trasformiamo 
+    %% in una comoda lista di mappe!
+    lists:map(fun(Game) ->
+        #{
+            <<"game_id">> => Game#game.game_id,
+            <<"status">> => <<"waiting">>,
+            <<"creator">> => Game#game.creator
+        }
+    end, LimitedGames).
 
 %% Handle incoming Erlang messages from the game_server
 %% These are the broadcasts (number drawn, game started, etc.)
