@@ -1,5 +1,5 @@
 -module(db_manager).
--export([init_cluster_db/1], [cleanup_cluster_db/1]).
+-export([init_cluster_db/1, cleanup_cluster_db/1]).
 -include("../include/bingo_records.hrl").
 
 init_cluster_db(Nodes) ->

@@ -103,12 +103,13 @@ function connectWebSocket() {
 }
 
 function handleServerMessage(msg) {
+    console.log("Received message:", msg.event);
     switch (msg.event) {
         case "auth_success":
             showOpenGames(msg.open_games);
             break;
         case "game_created":
-            document.getElementById('btn-create').style.display = 'none';
+            document.getElementById('lobby').style.display = 'none';
             document.getElementById('play-area').style.display = 'block';
             document.getElementById('btn-start').style.display = 'inline-block';
             document.getElementById('cards-container').replaceChildren();
@@ -119,7 +120,7 @@ function handleServerMessage(msg) {
             currentGameId = msg.game_id;
             break;
         case "joined":
-            document.getElementById('btn-create').style.display = 'none';
+            document.getElementById('lobby').style.display = 'none';
             document.getElementById('play-area').style.display = 'block';
             document.getElementById('cards-container').replaceChildren();
             document.getElementById('lobby-games-list').replaceChildren();
@@ -149,18 +150,22 @@ function handleServerMessage(msg) {
             logMessage("TOMBOLA! The game is over.");
             break;
         case "leave_game":
-            document.getElementById('btn-create').style.display = 'block';
+            document.getElementById('lobby').style.display = 'flex';
             document.getElementById('play-area').style.display = 'none';
             currentGameId = null;
             showOpenGames(msg.open_games);
+            break;
+        case "user_joined":
+            logMessage(`${msg.user} joined the game.`);
             break;
         case "user_left":
             logMessage(`${msg.user} left the game.`);
             //TODO: mostrare utenti ecc
             break;
         case "game_cancelled":
-            document.getElementById('btn-create').style.display = 'block';
+            document.getElementById('lobby').style.display = 'flex';
             document.getElementById('play-area').style.display = 'none';
+            currentGameId = null;
             showOpenGames(msg.open_games);
             break;
         case "error":

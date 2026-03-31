@@ -4,7 +4,7 @@
 -include("../include/bingo_records.hrl").
 
 %% API
--export([start_link/2, join/3, buy_card/2, start_game/2, claim_win/4]).
+-export([start_link/2, join/3, buy_card/2, start_game/2, claim_win/4, leave/2]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
@@ -36,8 +36,8 @@ join(GamePid, Username, WsPid) ->
     gen_server:call(GamePid, {join, Username, WsPid}).
 
 %% User leaves the game. WsPid is the Cowboy WebSocket process PID for broadcasting.
-leave(GamePid, Username, WsPid) ->
-    gen_server:call(GamePid, {leave, Username, WsPid}).
+leave(GamePid, Username) ->
+    gen_server:call(GamePid, {leave, Username}).
 
 %% User buys a card
 buy_card(GamePid, Username) ->
@@ -69,23 +69,24 @@ init([GameId, Creator]) ->
     {ok, #state{game_id = GameId, creator = Creator}}.
 
 handle_call({join, Username, WsPid}, _From, State = #state{status = waiting, players = Players}) ->
+    broadcast(Players, {user_joined, Username}),
     %% Update state with new player and their WebSocket PID
     NewPlayers = [{Username, WsPid} | proplists:delete(Username, Players)],
     {reply, ok, State#state{players = NewPlayers}};
 
-handle_call({leave, Username, WsPid}, _From, State = #state{creator = Creator, status = Status, players = Players, game_id = GameId}) ->
+handle_call({leave, Username}, _From, State = #state{creator = Creator, status = Status, players = Players, game_id = GameId}) ->
     case {Username =:= Creator, Status =:= waiting} of
         {true, true} ->
             %% Il creatore lascia e la partita è in waiting → cancelliamo la partita
             broadcast(State#state.players, game_cancelled),
             delete_game(GameId),
-            {stop, 'game cancelled', {game_cancelled, GameId}, State};
+            {stop, normal, {game_cancelled, GameId}, State};
         _ ->
             %% Rimuovi il giocatore dalla lista (sia creatore dopo l'inizio del gioco sia giocatore normale)
             NewPlayers = lists:filter(fun({U, _}) -> U =/= Username end, Players),
             broadcast(NewPlayers, {user_left, Username}),
             {reply, ok, State#state{players = NewPlayers}}
-    end.
+    end;
 
 handle_call({buy_card, Username}, _From, State = #state{game_id = GameId, pot = Pot, status = waiting}) ->
     %% Transaction to check balance, deduct cost, and generate a card
@@ -265,7 +266,7 @@ payout(Username, Amount) ->
 delete_game(GameId) ->
     %% Operazione Mnesia distribuita
     F = fun() ->
-        mnesia:delete({games, GameId})
+        mnesia:delete({game, GameId})
     end,
     case mnesia:transaction(F) of
         {atomic, ok} ->

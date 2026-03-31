@@ -1,6 +1,8 @@
 -module(main_server).
 -behaviour(gen_server).
 
+-include("../include/bingo_records.hrl").
+
 -export([start_link/1, init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 %% Lo stato mantiene la lista dei nodi da monitorare
@@ -37,7 +39,7 @@ handle_info({nodeup, Node}, State) ->
     io:format("Nodo online: ~p, ripristino giochi...\n", [Node]),
 
     %% Recupera tutte le partite in stato 'playing' o 'waiting'
-    F = fun() -> mnesia:match_object(#game{game_id = '_', status = '_', creator = '_', players = '_', drawn = '_', pot = '_'}) end,
+    F = fun() -> mnesia:match_object(#game{game_id = '_', status = '_', creator = '_', players = '_', drawn_numbers = '_', pot = '_'}) end,
     Games = mnesia:transaction(F),
     
     lists:foreach(fun(Game) ->
@@ -52,9 +54,9 @@ handle_info({nodeup, Node}, State) ->
                 %% Esiste già → skip
                 ok
         end
-    end, Games).
+    end, Games),
 
-    {noreply, State}.
+    {noreply, State};
 
 handle_info({nodedown, Node}, State) ->
     io:format("~n[MONITOR] ATTENZIONE! Nodo andato OFFLINE: ~p~n", [Node]),
@@ -65,7 +67,7 @@ handle_info({nodedown, Node}, State) ->
 handle_info(_Info, State) ->
     {noreply, State}.
 
-terminate(Reason, State = #state{cowboy_nodes = Nodes}) ->
+terminate(Reason, _State = #state{cowboy_nodes = Nodes}) ->
     io:format("Main Server in terminate: ~p. Monitored nodes: ~p~n", [Reason, Nodes]),
     
     %% Esempio: eventuale pulizia DB o cancellazione timer

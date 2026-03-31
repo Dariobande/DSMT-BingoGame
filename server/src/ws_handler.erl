@@ -70,7 +70,7 @@ handle_client_action(<<"create_game">>, _Data, State = #ws_state{game_pid = unde
 handle_client_action(<<"create_game">>, _Data, State = #ws_state{game_pid = _Pid}) ->
     %% l'utente è già in gioco
     Reply = jsx:encode(#{<<"event">> => <<"error">>, <<"message">> => <<"Sei già in una partita!">>}),
-    {reply, {text, Reply}, State}.
+    {reply, {text, Reply}, State};
 
 %% Join an existing game
 handle_client_action(<<"join_game">>, Data, State) ->
@@ -94,18 +94,18 @@ handle_client_action(<<"join_game">>, Data, State) ->
     end;
 
 %% Handle undefined game
-handle_client_action(_Action, _Data, State = #ws_state{username = User, game_pid = undefined}) ->
+handle_client_action(_Action, _Data, State = #ws_state{game_pid = undefined}) ->
     %% ...lo blocchiamo restituendo un errore!
     Reply = jsx:encode(#{<<"event">> => <<"error">>, <<"message">> => <<"You are not in game!">>}),
     {reply, {text, Reply}, State};
 
 %% Leave an existing game
-handle_client_action(<<"leave_game">>, Data, State = #ws_state{username = User, game_pid = Pid}) ->   
-    game_server:leave(GamePid, Username, self()),
-    Reply = jsx:encode(#{<<"event">> => <<"left">>}),
+handle_client_action(<<"leave_game">>, _Data, State = #ws_state{username = User, game_pid = GamePid}) ->   
+    game_server:leave(GamePid, User),
+    Reply = jsx:encode(#{<<"event">> => <<"leave_game">>}),
     
     %% Update state of the WS connection: remove game PID
-    {reply, {text, Reply}, State#ws_state{username = Username, game_pid = undefined}};
+    {reply, {text, Reply}, State#ws_state{username = User, game_pid = undefined}};
 
 %% Buy a card
 handle_client_action(<<"buy_card">>, _Data, State = #ws_state{username = User, game_pid = Pid}) ->
@@ -179,9 +179,13 @@ websocket_info({game_event, {user_left, User}}, State) ->
     Payload = jsx:encode(#{<<"event">> => <<"user_left">>, <<"user">> => list_to_binary(User)}),
     {reply, {text, Payload}, State};
 
+websocket_info({game_event, {user_joined, User}}, State) ->
+    Payload = jsx:encode(#{<<"event">> => <<"user_joined">>, <<"user">> => list_to_binary(User)}),
+    {reply, {text, Payload}, State};
+
 websocket_info({game_event, game_cancelled}, State) ->
     Payload = jsx:encode(#{<<"event">> => <<"game_cancelled">>}),
-    {reply, {text, Payload}, State};
+    {reply, {text, Payload}, State#ws_state{game_pid = undefined}};
 
 websocket_info(_Info, State) ->
     {ok, State}.
