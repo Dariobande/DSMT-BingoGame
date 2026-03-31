@@ -44,6 +44,12 @@ function goRegister() {
     document.getElementById('register-msg').innerText = "Please enter a username and a password, then confirm the password.\nThe password must be at least 8 characters long and must contain at least one upper-case character, 1 number and 1 special character.";
 }
 
+function goLogin() {
+    document.getElementById('register-section').style.display = 'none';
+    document.getElementById('auth-section').style.display = 'flex';
+    document.getElementById('auth-msg').innerText = "";
+}
+
 async function login() {
     const user = document.getElementById('username').value;
     const pass = document.getElementById('password').value;
@@ -99,32 +105,7 @@ function connectWebSocket() {
 function handleServerMessage(msg) {
     switch (msg.event) {
         case "auth_success":
-            const lobbyDiv = document.getElementById('lobby-games-list');
-            lobbyDiv.replaceChildren();
-            
-            if (msg.open_games.length === 0) {
-                p = document.createElement('p');
-                p.innerText = "There are no open matches! Create a new one";
-                lobbyDiv.appendChild(p);
-            } else {
-                // For each game, create a row with the creator's name and a Join button
-                msg.open_games.forEach(game => {
-                    const gameRow = document.createElement('div');
-                    gameRow.style.marginBottom = "10px";
-                    
-                    const infoText = document.createElement('span');
-                    const creator = String.fromCodePoint(...game.creator);
-                    infoText.innerText = `Game created by ${creator}`;
-                    
-                    const btn = document.createElement('button');
-                    btn.innerText = 'Join';
-                    btn.onclick = () => joinGame(game.game_id);
-                    
-                    gameRow.appendChild(infoText);
-                    gameRow.appendChild(btn);
-                    lobbyDiv.appendChild(gameRow);
-                });
-            }
+            showOpenGames(msg.open_games);
             break;
         case "game_created":
             document.getElementById('btn-create').style.display = 'none';
@@ -134,6 +115,8 @@ function handleServerMessage(msg) {
             document.getElementById('lobby-games-list').replaceChildren();
             document.getElementById('last-number').innerText = '-';
             logMessage(`Game created.`);
+            logMessage(`Waiting for the game to start.`);
+            currentGameId = msg.game_id;
             break;
         case "joined":
             document.getElementById('btn-create').style.display = 'none';
@@ -142,6 +125,8 @@ function handleServerMessage(msg) {
             document.getElementById('lobby-games-list').replaceChildren();
             document.getElementById('last-number').innerText = '-';
             logMessage(`Joined game successfully.`);
+            logMessage(`Waiting for the game to start.`);
+            currentGameId = msg.game_id;
             break;
         case "card_bought":
             renderCard(msg.grid);
@@ -162,6 +147,21 @@ function handleServerMessage(msg) {
             break;
         case "game_over":
             logMessage("TOMBOLA! The game is over.");
+            break;
+        case "leave_game":
+            document.getElementById('btn-create').style.display = 'block';
+            document.getElementById('play-area').style.display = 'none';
+            currentGameId = null;
+            showOpenGames(msg.open_games);
+            break;
+        case "user_left":
+            logMessage(`${msg.user} left the game.`);
+            //TODO: mostrare utenti ecc
+            break;
+        case "game_cancelled":
+            document.getElementById('btn-create').style.display = 'block';
+            document.getElementById('play-area').style.display = 'none';
+            showOpenGames(msg.open_games);
             break;
         case "error":
             alert(`Error: ${msg.reason}`);
@@ -192,6 +192,10 @@ function claimWin(combination) {
     ws.send(JSON.stringify({ action: "claim_win", combination: combination, card_id: "dummy_card_id" }));
 }
 
+function leaveGame() {
+    ws.send(JSON.stringify({ action: "leave_game" }));
+}
+
 function renderCard(grid) {
     const container = document.getElementById('cards-container');
     const cardDiv = document.createElement('div');
@@ -217,4 +221,35 @@ function logMessage(text) {
     p = document.createElement('p');
     p.innerText = text;
     log.prepend(p);
+}
+
+function showOpenGames(open_games) {
+    const lobbyDiv = document.getElementById('lobby-games-list');
+    lobbyDiv.replaceChildren();
+
+    if(open_games == null) return;
+    
+    if (open_games.length === 0) {
+        p = document.createElement('p');
+        p.innerText = "There are no open matches! Create a new one";
+        lobbyDiv.appendChild(p);
+    } else {
+        // For each game, create a row with the creator's name and a Join button
+        open_games.forEach(game => {
+            const gameRow = document.createElement('div');
+            gameRow.style.marginBottom = "10px";
+            
+            const infoText = document.createElement('span');
+            const creator = String.fromCodePoint(...game.creator);
+            infoText.innerText = `Game created by ${creator}`;
+            
+            const btn = document.createElement('button');
+            btn.innerText = 'Join';
+            btn.onclick = () => joinGame(game.game_id);
+            
+            gameRow.appendChild(infoText);
+            gameRow.appendChild(btn);
+            lobbyDiv.appendChild(gameRow);
+        });
+    }
 }

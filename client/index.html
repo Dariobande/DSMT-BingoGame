@@ -22,7 +22,11 @@
         <input type="text" id="reg-username" placeholder="Username">
         <input type="password" id="reg-password" placeholder="Password">
         <input type="password" id="confirm-password" placeholder="Confirm Password">
-        <button onclick="register()">Register</button>
+        <div class="button-row">
+            <button onclick="register()">Register</button>
+            <button onclick="goLogin()">Login Page</button>
+        </div>
+        
         <p id="register-msg"></p>
     </div>
 
@@ -50,6 +54,7 @@
                 <button onclick="claimWin('tombola')">Tombola!</button>
             </div>
             <p id="game-log"></p>
+            <button id="btn-leave" onclick="leaveGame()">Leave Game</button>
         </div>
     </div>
 

@@ -52,7 +52,7 @@ handle_client_action(_Action, _Data, State = #ws_state{username = undefined}) ->
     {reply, {text, Reply}, State};
 
 %% Create a new game
-handle_client_action(<<"create_game">>, _Data, State) ->
+handle_client_action(<<"create_game">>, _Data, State = #ws_state{game_pid = undefined}) ->
     %% prendi l'username associato allo stato del WS
     Username = State#ws_state.username,
     
@@ -66,6 +66,11 @@ handle_client_action(<<"create_game">>, _Data, State) ->
     
     Reply = jsx:encode(#{<<"event">> => <<"game_created">>, <<"game_id">> => GameId}),
     {reply, {text, Reply}, State#ws_state{username = Username, game_pid = GamePid}};
+    
+handle_client_action(<<"create_game">>, _Data, State = #ws_state{game_pid = _Pid}) ->
+    %% l'utente è già in gioco
+    Reply = jsx:encode(#{<<"event">> => <<"error">>, <<"message">> => <<"Sei già in una partita!">>}),
+    {reply, {text, Reply}, State}.
 
 %% Join an existing game
 handle_client_action(<<"join_game">>, Data, State) ->
@@ -82,11 +87,25 @@ handle_client_action(<<"join_game">>, Data, State) ->
         GamePid ->
             %% Found the game, join it
             game_server:join(GamePid, Username, self()),
-            Reply = jsx:encode(#{<<"event">> => <<"joined">>}),
+            Reply = jsx:encode(#{<<"event">> => <<"joined">>, <<"game_id">> => GameId}),
             
             %% Update state of the WS connection with the username and game PID
             {reply, {text, Reply}, State#ws_state{username = Username, game_pid = GamePid}}
     end;
+
+%% Handle undefined game
+handle_client_action(_Action, _Data, State = #ws_state{username = User, game_pid = undefined}) ->
+    %% ...lo blocchiamo restituendo un errore!
+    Reply = jsx:encode(#{<<"event">> => <<"error">>, <<"message">> => <<"You are not in game!">>}),
+    {reply, {text, Reply}, State};
+
+%% Leave an existing game
+handle_client_action(<<"leave_game">>, Data, State = #ws_state{username = User, game_pid = Pid}) ->   
+    game_server:leave(GamePid, Username, self()),
+    Reply = jsx:encode(#{<<"event">> => <<"left">>}),
+    
+    %% Update state of the WS connection: remove game PID
+    {reply, {text, Reply}, State#ws_state{username = Username, game_pid = undefined}};
 
 %% Buy a card
 handle_client_action(<<"buy_card">>, _Data, State = #ws_state{username = User, game_pid = Pid}) ->
@@ -154,6 +173,14 @@ websocket_info({game_event, {game_started, Pot}}, State) ->
 
 websocket_info({game_event, game_over}, State) ->
     Payload = jsx:encode(#{<<"event">> => <<"game_over">>}),
+    {reply, {text, Payload}, State};
+
+websocket_info({game_event, {user_left, User}}, State) ->
+    Payload = jsx:encode(#{<<"event">> => <<"user_left">>, <<"user">> => list_to_binary(User)}),
+    {reply, {text, Payload}, State};
+
+websocket_info({game_event, game_cancelled}, State) ->
+    Payload = jsx:encode(#{<<"event">> => <<"game_cancelled">>}),
     {reply, {text, Payload}, State};
 
 websocket_info(_Info, State) ->

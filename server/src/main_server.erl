@@ -34,9 +34,27 @@ handle_cast(_Msg, State) ->
 
 %% Gestione eventi di Node Up e Node Down
 handle_info({nodeup, Node}, State) ->
-    io:format("~n[MONITOR] Nodo rilevato ONLINE: ~p~n", [Node]),
-    %% Qui potremmo scatenare logiche di riallineamento se necessario
-    {noreply, State};
+    io:format("Nodo online: ~p, ripristino giochi...\n", [Node]),
+
+    %% Recupera tutte le partite in stato 'playing' o 'waiting'
+    F = fun() -> mnesia:match_object(#game{game_id = '_', status = '_', creator = '_', players = '_', drawn = '_', pot = '_'}) end,
+    Games = mnesia:transaction(F),
+    
+    lists:foreach(fun(Game) ->
+        GameId = Game#game.game_id,
+        Creator = Game#game.creator,
+        case global:whereis_name(GameId) of
+            undefined ->
+                %% Processo perso → lo ricreo
+                {ok, Pid} = game_server:start_link(GameId, Creator),
+                gen_server:call(Pid, {restore_state, Game});
+            _Pid ->
+                %% Esiste già → skip
+                ok
+        end
+    end, Games).
+
+    {noreply, State}.
 
 handle_info({nodedown, Node}, State) ->
     io:format("~n[MONITOR] ATTENZIONE! Nodo andato OFFLINE: ~p~n", [Node]),
@@ -47,7 +65,15 @@ handle_info({nodedown, Node}, State) ->
 handle_info(_Info, State) ->
     {noreply, State}.
 
-terminate(_Reason, _State) ->
+terminate(Reason, State = #state{cowboy_nodes = Nodes}) ->
+    io:format("Main Server in terminate: ~p. Monitored nodes: ~p~n", [Reason, Nodes]),
+    
+    %% Esempio: eventuale pulizia DB o cancellazione timer
+    db_manager:cleanup_cluster_db(Nodes),
+
+    %% Arresto dei nodi remoti
+    [rpc:call(Node, erlang, halt, []) || Node <- Nodes],
+    
     ok.
 
 code_change(_OldVsn, State, _Extra) ->

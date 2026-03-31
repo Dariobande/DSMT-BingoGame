@@ -15,6 +15,10 @@ echo "Compilazione in corso (assicurati di aver lanciato erlc prima)..."
 # Chiamiamo la nostra funzione custom passando la porta specifica per ogni nodo
 echo "Avvio Node 1 (Cowboy API/WS) sulla porta 8081..."
 erl -sname node1@localhost -setcookie $COOKIE $PATHS -eval "bingo_app:start(8081)." -detached
+#gnome-terminal -- bash -c "
+#erl -sname node1@localhost -setcookie $COOKIE $PATHS -eval 'bingo_app:start(8081).';
+#exec bash
+#"
 
 echo "Avvio Node 2 (Cowboy API/WS) sulla porta 8082..."
 erl -sname node2@localhost -setcookie $COOKIE $PATHS -eval "bingo_app:start(8082)." -detached

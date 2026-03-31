@@ -35,6 +35,10 @@ start_link(GameId, Creator) ->
 join(GamePid, Username, WsPid) ->
     gen_server:call(GamePid, {join, Username, WsPid}).
 
+%% User leaves the game. WsPid is the Cowboy WebSocket process PID for broadcasting.
+leave(GamePid, Username, WsPid) ->
+    gen_server:call(GamePid, {leave, Username, WsPid}).
+
 %% User buys a card
 buy_card(GamePid, Username) ->
     gen_server:call(GamePid, {buy_card, Username}).
@@ -68,6 +72,20 @@ handle_call({join, Username, WsPid}, _From, State = #state{status = waiting, pla
     %% Update state with new player and their WebSocket PID
     NewPlayers = [{Username, WsPid} | proplists:delete(Username, Players)],
     {reply, ok, State#state{players = NewPlayers}};
+
+handle_call({leave, Username, WsPid}, _From, State = #state{creator = Creator, status = Status, players = Players, game_id = GameId}) ->
+    case {Username =:= Creator, Status =:= waiting} of
+        {true, true} ->
+            %% Il creatore lascia e la partita è in waiting → cancelliamo la partita
+            broadcast(State#state.players, game_cancelled),
+            delete_game(GameId),
+            {stop, 'game cancelled', {game_cancelled, GameId}, State};
+        _ ->
+            %% Rimuovi il giocatore dalla lista (sia creatore dopo l'inizio del gioco sia giocatore normale)
+            NewPlayers = lists:filter(fun({U, _}) -> U =/= Username end, Players),
+            broadcast(NewPlayers, {user_left, Username}),
+            {reply, ok, State#state{players = NewPlayers}}
+    end.
 
 handle_call({buy_card, Username}, _From, State = #state{game_id = GameId, pot = Pot, status = waiting}) ->
     %% Transaction to check balance, deduct cost, and generate a card
@@ -171,7 +189,27 @@ handle_info(draw_number, State = #state{status = playing, drawn = Drawn}) ->
 handle_info(_Info, State) ->
     {noreply, State}.
 
-terminate(_Reason, _State) ->
+terminate(Reason, State = #state{game_id = GameId}) ->
+    io:format("Game server ~p terminated: ~p~n", [State#state.game_id, Reason]),
+
+    %% Rimuove il registro globale
+    case global:whereis_name(GameId) of
+        undefined -> ok;   % già rimosso o mai registrato
+        _Pid -> global:unregister_name(GameId)
+    end,
+    
+    %% Se avevi timer attivi
+    case State#state.timer_ref of
+        undefined -> ok;
+        Ref -> erlang:cancel_timer(Ref)
+    end,
+
+    %% Eventuali notifiche ai giocatori
+    %% lists:foreach(fun({Username, WsPid}) ->
+    %%                %% Puoi inviare un messaggio di chiusura WS
+    %%                WsPid ! {game_terminated, State#state.game_id}
+    %%            end, State#state.players),
+
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
@@ -223,3 +261,17 @@ payout(Username, Amount) ->
 
     {atomic, Balance} = mnesia:transaction(F),
     Balance.
+
+delete_game(GameId) ->
+    %% Operazione Mnesia distribuita
+    F = fun() ->
+        mnesia:delete({games, GameId})
+    end,
+    case mnesia:transaction(F) of
+        {atomic, ok} ->
+            io:format("Partita ~p cancellata con successo da Mnesia~n", [GameId]),
+            ok;
+        {aborted, Reason} ->
+            io:format("Errore cancellando partita ~p: ~p~n", [GameId, Reason]),
+            {error, Reason}
+    end.

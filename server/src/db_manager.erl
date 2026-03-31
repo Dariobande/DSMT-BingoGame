@@ -1,5 +1,5 @@
 -module(db_manager).
--export([init_cluster_db/1]).
+-export([init_cluster_db/1], [cleanup_cluster_db/1]).
 -include("../include/bingo_records.hrl").
 
 init_cluster_db(Nodes) ->
@@ -39,3 +39,8 @@ init_cluster_db(Nodes) ->
     %% Attesa che le tabelle siano pronte e sincronizzate
     mnesia:wait_for_tables([user, game, card], 5000),
     io:format("Database Mnesia inizializzato e tabelle pronte.~n").
+
+cleanup_cluster_db(Nodes) ->
+    %% Stop Mnesia su tutti i nodi
+    rpc:multicall(Nodes, mnesia, stop, []),
+    ok.
