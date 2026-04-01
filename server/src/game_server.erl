@@ -56,37 +56,46 @@ claim_win(GamePid, Username, Combination, CardId) ->
 
 init([GameId, Creator]) ->
     %% Initialize the game state in Mnesia
-    GameRecord = #game{
-        game_id = GameId,
+    InitialState = #state{
+        game_id = GameId, 
         creator = Creator,
         status = waiting,
-        drawn_numbers = [],
+        drawn = [],
         pot = 0,
-        players = []
+        players = [],
+        won_combinations = []
     },
-    F = fun() -> mnesia:write(GameRecord) end,
-    mnesia:transaction(F),
-    {ok, #state{game_id = GameId, creator = Creator}}.
+    update_db(InitialState),
+    {ok, InitialState}.
 
 handle_call({join, Username, WsPid}, _From, State = #state{status = waiting, players = Players}) ->
     broadcast(Players, {user_joined, Username}),
     %% Update state with new player and their WebSocket PID
     NewPlayers = [{Username, WsPid} | proplists:delete(Username, Players)],
-    {reply, ok, State#state{players = NewPlayers}};
+    PlayerCount = length(NewPlayers),
+
+    NewState = State#state{players = NewPlayers},
+    update_db(NewState),
+
+    {reply, {ok, PlayerCount}, NewState};
 
 handle_call({leave, Username}, _From, State = #state{creator = Creator, status = Status, players = Players, game_id = GameId}) ->
     case {Username =:= Creator, Status =:= waiting} of
         {true, true} ->
             %% Il creatore lascia e la partita è in waiting → cancelliamo la partita
+            delete_game(GameId),
             NewPlayers = lists:filter(fun({U, _}) -> U =/= Username end, Players),
             broadcast(NewPlayers, game_cancelled),
-            delete_game(GameId),
             {stop, normal, {game_cancelled, GameId}, State};
         _ ->
             %% Rimuovi il giocatore dalla lista (sia creatore dopo l'inizio del gioco sia giocatore normale)
             NewPlayers = lists:filter(fun({U, _}) -> U =/= Username end, Players),
             broadcast(NewPlayers, {user_left, Username}),
-            {reply, ok, State#state{players = NewPlayers}}
+
+            NewState = State#state{players = NewPlayers},
+            update_db(NewState),
+
+            {reply, ok, NewState}
     end;
 
 handle_call({buy_card, Username}, _From, State = #state{game_id = GameId, pot = Pot, status = waiting}) ->
@@ -112,7 +121,9 @@ handle_call({buy_card, Username}, _From, State = #state{game_id = GameId, pot = 
     end,
     case mnesia:transaction(F) of
         {atomic, {ok, Card, Balance}} -> 
-            {reply, {ok, Card, Balance}, State#state{pot = Pot + ?CARD_COST}};
+            NewState = State#state{pot = Pot + ?CARD_COST},
+            update_db(NewState),
+            {reply, {ok, Card, Balance}, NewState};
         {atomic, Error} -> 
             {reply, Error, State}
     end;
@@ -121,8 +132,8 @@ handle_call({start_game, Username}, _From, State = #state{creator = Creator, sta
     %% Start the drawing loop
     Ref = erlang:send_after(?DRAW_INTERVAL, self(), draw_number),
     
-    %% Update Mnesia state to 'playing'
-    update_db_game_status(State#state.game_id, playing),
+    NewState = State#state{status = playing},
+    update_db(NewState),
     
     %% Notify all players
     broadcast(State#state.players, {game_started, State#state.pot}),
@@ -149,11 +160,14 @@ handle_call({claim_win, Username, Comb, CardId}, _From, State = #state{status = 
                     
                     %% If Tombola/Blackout, the game ends
                     if Comb =:= tombola ->
-                        update_db_game_status(State#state.game_id, finished),
+                        NewState = State#state{won_combinations = NewWon, status = finished},
+                        update_db(NewState),
                         broadcast(State#state.players, game_over),
-                        {stop, normal, {ok, Prize, NewBalance}, State#state{won_combinations = NewWon, status = finished}};
+                        {stop, normal, {ok, Prize, NewBalance}, NewState};
                     true ->
-                        {reply, {ok, Prize, NewBalance}, State#state{won_combinations = NewWon}}
+                        NewState = State#state{won_combinations = NewWon},
+                        update_db(NewState),
+                        {reply, {ok, Prize, NewBalance}, NewState}
                     end;
                 false ->
                     {reply, {error, invalid_claim}, State}
@@ -180,9 +194,9 @@ handle_info(draw_number, State = #state{status = playing, drawn = Drawn}) ->
             
             %% Broadcast to clients via their Cowboy WebSockets
             broadcast(State#state.players, {number_drawn, Num}),
-            
-            %% Update Mnesia for crash recovery
-            update_db_game_drawn(State#state.game_id, NewDrawn),
+
+            NewState = State#state{drawn = NewDrawn},
+            update_db(NewState),
             
             Ref = erlang:send_after(?DRAW_INTERVAL, self(), draw_number),
             {noreply, State#state{drawn = NewDrawn, timer_ref = Ref}}
@@ -224,20 +238,6 @@ broadcast(Players, Msg) ->
     %% Sends the Erlang message to the Cowboy WebSocket PIDs
     [WsPid ! {game_event, Msg} || {_User, WsPid} <- Players, is_pid(WsPid)].
 
-update_db_game_status(GameId, Status) ->
-    F = fun() -> 
-        [G] = mnesia:read(game, GameId),
-        mnesia:write(G#game{status = Status})
-    end,
-    mnesia:transaction(F).
-
-update_db_game_drawn(GameId, Drawn) ->
-    F = fun() -> 
-        [G] = mnesia:read(game, GameId),
-        mnesia:write(G#game{drawn_numbers = Drawn})
-    end,
-    mnesia:transaction(F).
-
 shuffle(List) ->
     [X || {_, X} <- lists:sort([{rand:uniform(), N} || N <- List])].
 
@@ -277,3 +277,18 @@ delete_game(GameId) ->
             io:format("Errore cancellando partita ~p: ~p~n", [GameId, Reason]),
             {error, Reason}
     end.
+
+update_db(State) ->
+    %% Costruiamo il record da salvare su DB prendendo i dati dallo Stato del server
+    GameRecord = #game{
+        game_id = State#state.game_id,
+        creator = State#state.creator,
+        status  = State#state.status,
+        players = State#state.players,
+        drawn_numbers = State#state.drawn,
+        pot = State#state.pot
+    },
+    
+    %% Scriviamo su Mnesia. Usiamo dirty_write perché è velocissimo in RAM
+    %% e sovrascrive automaticamente il vecchio record con lo stesso game_id.
+    mnesia:dirty_write(game, GameRecord).

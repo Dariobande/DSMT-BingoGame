@@ -6,6 +6,9 @@
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
+    <div id="error-container">
+        <div id="error-message"></div>
+    </div>
     <div id="auth-section">
         <h2>Login Page</h2>
         <input type="text" id="username" placeholder="Username">
@@ -35,12 +38,14 @@
         
         <div id="lobby">
             <button id="btn-create" onclick="createGame()">Create a Game</button>
+            <button id="btn-refresh" onclick="searchOpenGames()">Refresh</button>
         </div>
 
         <div id="lobby-games-list"></div>
 
         <div id="play-area" style="display:none;">
             <h3>Last Drawn Number: <span id="last-number" style="font-size: 2em; color: red;">-</span></h3>
+            <p>Players in this game: <span id="players-count-game">1</span></p>
             <button id="btn-start" onclick="startGame()" style="display:none;">Start Game</button>
             <button id="btn-buy" onclick="buyCard()">Buy Card (10 coins)</button>
             

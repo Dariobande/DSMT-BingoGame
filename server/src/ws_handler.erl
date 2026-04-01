@@ -54,6 +54,11 @@ handle_client_action(_Action, _Data, State = #ws_state{username = undefined}) ->
     Reply = jsx:encode(#{<<"event">> => <<"error">>, <<"message">> => <<"Non sei autenticato!">>}),
     {reply, {text, Reply}, State};
 
+handle_client_action(<<"search_open_games">>, _Data, State = #ws_state{game_pid = undefined}) ->
+    AvailableGames = find_open_games(),
+    Reply = jsx:encode(#{ <<"event">> => <<"show_open_games">>, <<"open_games">> => AvailableGames }),
+    {reply, {text, Reply}, State};
+
 %% Create a new game
 handle_client_action(<<"create_game">>, _Data, State = #ws_state{game_pid = undefined}) ->
     %% prendi l'username associato allo stato del WS
@@ -66,6 +71,10 @@ handle_client_action(<<"create_game">>, _Data, State = #ws_state{game_pid = unde
     %% Start the game_server process locally on this node
     {ok, GamePid} = game_server:start_link(GameId, Username),
     game_server:join(GamePid, Username, self()),
+
+    io:format("~n[CREAZIONE] Ho creato la partita con ID esatto: ~p~n", [GameId]),
+    io:format("[CREAZIONE] Il PID della partita è: ~p~n", [GamePid]),
+    io:format("[CREAZIONE] I nomi globali ora sono: ~p~n~n", [global:registered_names()]),
     
     Reply = jsx:encode(#{<<"event">> => <<"game_created">>, <<"game_id">> => GameId}),
     {reply, {text, Reply}, State#ws_state{username = Username, game_pid = GamePid}};
@@ -78,7 +87,10 @@ handle_client_action(<<"create_game">>, _Data, State = #ws_state{game_pid = _Pid
 %% Join an existing game
 handle_client_action(<<"join_game">>, Data, State) ->
     Username = State#ws_state.username,
-    GameId = binary_to_list(maps:get(<<"game_id">>, Data)),
+    GameId = maps:get(<<"game_id">>, Data),
+
+    io:format("~n[JOIN] Il client sta cercando l'ID esatto: ~p~n", [GameId]),
+    io:format("[JOIN] I nomi globali attivi in questo momento sono: ~p~n~n", [global:registered_names()]),
 
     %% Search for the game process using the global registry
     case global:whereis_name(GameId) of
@@ -89,8 +101,8 @@ handle_client_action(<<"join_game">>, Data, State) ->
             
         GamePid ->
             %% Found the game, join it
-            game_server:join(GamePid, Username, self()),
-            Reply = jsx:encode(#{<<"event">> => <<"joined">>, <<"game_id">> => GameId}),
+            {ok, PlayerCount} = game_server:join(GamePid, Username, self()),
+            Reply = jsx:encode(#{<<"event">> => <<"joined">>, <<"game_id">> => GameId, <<"player_count">> => PlayerCount}),
             
             %% Update state of the WS connection with the username and game PID
             {reply, {text, Reply}, State#ws_state{username = Username, game_pid = GamePid}}
@@ -105,7 +117,8 @@ handle_client_action(_Action, _Data, State = #ws_state{game_pid = undefined}) ->
 %% Leave an existing game
 handle_client_action(<<"leave_game">>, _Data, State = #ws_state{username = User, game_pid = GamePid}) ->   
     game_server:leave(GamePid, User),
-    Reply = jsx:encode(#{<<"event">> => <<"leave_game">>}),
+    AvailableGames = find_open_games(),
+    Reply = jsx:encode(#{<<"event">> => <<"leave_game">>, <<"open_games">> => AvailableGames}),
     
     %% Update state of the WS connection: remove game PID
     {reply, {text, Reply}, State#ws_state{username = User, game_pid = undefined}};
@@ -156,7 +169,8 @@ find_open_games() ->
         #{
             <<"game_id">> => Game#game.game_id,
             <<"status">> => <<"waiting">>,
-            <<"creator">> => Game#game.creator
+            <<"creator">> => Game#game.creator,
+            <<"player_count">> => length(Game#game.players)
         }
     end, LimitedGames).
 
@@ -187,7 +201,8 @@ websocket_info({game_event, {user_joined, User}}, State) ->
     {reply, {text, Payload}, State};
 
 websocket_info({game_event, game_cancelled}, State) ->
-    Payload = jsx:encode(#{<<"event">> => <<"game_cancelled">>}),
+    AvailableGames = find_open_games(),
+    Payload = jsx:encode(#{<<"event">> => <<"game_cancelled">>, <<"open_games">> => AvailableGames}),
     {reply, {text, Payload}, State#ws_state{game_pid = undefined}};
 
 websocket_info(_Info, State) ->

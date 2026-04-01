@@ -12,12 +12,13 @@
 
 %% Tabella Partite
 -record(game, {
-    game_id,        %% Chiave primaria (es. UUID o stringa)
-    creator,        %% Username di chi ha creato la partita
-    status,         %% 'waiting' (attesa inizio), 'playing' (in corso), 'finished' (terminata)
-    drawn_numbers,  %% Lista dei numeri già estratti
-    pot,            %% Montepremi totale
-    players         %% Lista degli username partecipanti
+    game_id,         %% Chiave primaria (es. UUID o stringa)
+    creator,         %% Username di chi ha creato la partita
+    status,          %% 'waiting' (attesa inizio), 'playing' (in corso), 'finished' (terminata)
+    drawn_numbers,   %% Lista dei numeri già estratti
+    pot,             %% Montepremi totale
+    players,         %% Lista degli username partecipanti
+    won_combinations %% Lista di combinazioni già reclamate (es. [{username, ambo}, {username, terno}]) per evitare doppi reclami
 }).
 
 %% Tabella Cartelle

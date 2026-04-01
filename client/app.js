@@ -3,6 +3,7 @@ let ws = null;
 let currentGameId = null;
 let token = null;
 let pingInterval = null;
+let clickCells = false;
 
 // --- API HTTP ---
 
@@ -118,6 +119,7 @@ function handleServerMessage(msg) {
             showOpenGames(msg.open_games);
             break;
         case "game_created":
+            document.getElementById('players-count-game').innerText = "1";
             document.getElementById('btn-start').style.display = 'inline-block';
             enterGame(msg.game_id);
             logMessage(`Game created.`);
@@ -125,6 +127,7 @@ function handleServerMessage(msg) {
             break;
         case "joined":
             document.getElementById('btn-start').style.display = 'none';
+            document.getElementById('players-count-game').innerText = msg.player_count;
             enterGame(msg.game_id);
             logMessage(`Joined game successfully.`);
             logMessage(`Waiting for the game to start.`);
@@ -137,6 +140,8 @@ function handleServerMessage(msg) {
             logMessage(`Game started! Total pot: ${msg.pot}`);
             document.getElementById('controls').style.display = 'flex';
             document.getElementById('btn-buy').style.display = 'none';
+            document.getElementById('btn-start').style.display = 'none';
+            clickCells = true;
             break;
         case "number_drawn":
             document.getElementById('last-number').innerText = msg.number;
@@ -155,17 +160,24 @@ function handleServerMessage(msg) {
             exitGame(msg.open_games)
             break;
         case "user_joined":
+            const playersCountJoin = document.getElementById('players-count-game');
+            playersCountJoin.innerText = parseInt(playersCountJoin.innerText) + 1;
             logMessage(`${msg.user} joined the game.`);
             break;
         case "user_left":
+            const playersCountLeave = document.getElementById('players-count-game');
+            playersCountLeave.innerText = parseInt(playersCountLeave.innerText) - 1;
             logMessage(`${msg.user} left the game.`);
             //TODO: mostrare utenti ecc
             break;
         case "game_cancelled":
             exitGame(msg.open_games)
             break;
+        case "show_open_games":
+            showOpenGames(msg.open_games);
+            break;
         case "error":
-            alert(`Error: ${msg.reason}`);
+            showError(msg.reason);
             break;
     }
 }
@@ -193,6 +205,10 @@ function claimWin(combination) {
     ws.send(JSON.stringify({ action: "claim_win", combination: combination, card_id: "dummy_card_id" }));
 }
 
+function searchOpenGames() {
+    ws.send(JSON.stringify({ action: "search_open_games" }));
+}
+
 function leaveGame() {
     ws.send(JSON.stringify({ action: "leave_game" }));
 }
@@ -208,7 +224,7 @@ function renderCard(grid) {
         cell.className = 'bingo-cell';
         cell.innerText = num;
         cell.onclick = () => {
-            // L'utente clicca manualmente per segnare il numero [cite: 15]
+            if(!clickCells) return;
             if(cell.style.backgroundColor == 'lightgreen')
                 cell.style.backgroundColor = '';
             else
@@ -245,7 +261,8 @@ function showOpenGames(open_games) {
             
             const infoText = document.createElement('span');
             const creator = String.fromCodePoint(...game.creator);
-            infoText.innerText = `Game created by ${creator}`;
+            const playerCount = game.player_count;
+            infoText.innerText = `Game created by ${creator}, Players: ${playerCount}`;
             
             const btn = document.createElement('button');
             btn.innerText = 'Join';
@@ -261,16 +278,35 @@ function showOpenGames(open_games) {
 function enterGame(game_id) {
     document.getElementById('lobby').style.display = 'none';
     document.getElementById('play-area').style.display = 'block';
+    document.getElementById('lobby-games-list').replaceChildren();
     document.getElementById('cards-container').replaceChildren();
     document.getElementById('last-number').innerText = '-';
     document.getElementById('controls').style.display = 'none';
-    document.getElementById('btn-buy').style.display = 'block';
+    document.getElementById('btn-buy').style.display = 'inline-block';
     currentGameId = game_id;
 }
 
 function exitGame(open_games) {
     document.getElementById('lobby').style.display = 'flex';
     document.getElementById('play-area').style.display = 'none';
+    clickCells = false;
     currentGameId = null;
     showOpenGames(open_games);
+}
+
+function showError(message, duration = 3000) {
+    const errorDiv = document.getElementById('error-message');
+    errorDiv.innerText = message;
+    errorDiv.style.display = 'block';
+    errorDiv.style.opacity = 1; // pieno
+
+    // Dopo un breve delay, inizia il fade-out
+    setTimeout(() => {
+        errorDiv.style.opacity = 0;
+    }, 100); // ritardo minimo per far partire la transizione
+
+    // Nasconde completamente dopo la durata
+    setTimeout(() => {
+        errorDiv.style.display = 'none';
+    }, duration);
 }
