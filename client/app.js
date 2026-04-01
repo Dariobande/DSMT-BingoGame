@@ -118,25 +118,16 @@ function handleServerMessage(msg) {
             showOpenGames(msg.open_games);
             break;
         case "game_created":
-            document.getElementById('btn-create').style.display = 'none';
-            document.getElementById('play-area').style.display = 'block';
             document.getElementById('btn-start').style.display = 'inline-block';
-            document.getElementById('cards-container').replaceChildren();
-            document.getElementById('lobby-games-list').replaceChildren();
-            document.getElementById('last-number').innerText = '-';
+            enterGame(msg.game_id);
             logMessage(`Game created.`);
             logMessage(`Waiting for the game to start.`);
-            currentGameId = msg.game_id;
             break;
         case "joined":
-            document.getElementById('btn-create').style.display = 'none';
-            document.getElementById('play-area').style.display = 'block';
-            document.getElementById('cards-container').replaceChildren();
-            document.getElementById('lobby-games-list').replaceChildren();
-            document.getElementById('last-number').innerText = '-';
+            document.getElementById('btn-start').style.display = 'none';
+            enterGame(msg.game_id);
             logMessage(`Joined game successfully.`);
             logMessage(`Waiting for the game to start.`);
-            currentGameId = msg.game_id;
             break;
         case "card_bought":
             renderCard(msg.grid);
@@ -144,6 +135,8 @@ function handleServerMessage(msg) {
             break;
         case "game_started":
             logMessage(`Game started! Total pot: ${msg.pot}`);
+            document.getElementById('controls').style.display = 'flex';
+            document.getElementById('btn-buy').style.display = 'none';
             break;
         case "number_drawn":
             document.getElementById('last-number').innerText = msg.number;
@@ -159,10 +152,7 @@ function handleServerMessage(msg) {
             logMessage("TOMBOLA! The game is over.");
             break;
         case "leave_game":
-            document.getElementById('btn-create').style.display = 'block';
-            document.getElementById('play-area').style.display = 'none';
-            currentGameId = null;
-            showOpenGames(msg.open_games);
+            exitGame(msg.open_games)
             break;
         case "user_joined":
             logMessage(`${msg.user} joined the game.`);
@@ -172,10 +162,7 @@ function handleServerMessage(msg) {
             //TODO: mostrare utenti ecc
             break;
         case "game_cancelled":
-            document.getElementById('btn-create').style.display = 'block';
-            document.getElementById('play-area').style.display = 'none';
-            currentGameId = null;
-            showOpenGames(msg.open_games);
+            exitGame(msg.open_games)
             break;
         case "error":
             alert(`Error: ${msg.reason}`);
@@ -269,4 +256,21 @@ function showOpenGames(open_games) {
             lobbyDiv.appendChild(gameRow);
         });
     }
+}
+
+function enterGame(game_id) {
+    document.getElementById('lobby').style.display = 'none';
+    document.getElementById('play-area').style.display = 'block';
+    document.getElementById('cards-container').replaceChildren();
+    document.getElementById('last-number').innerText = '-';
+    document.getElementById('controls').style.display = 'none';
+    document.getElementById('btn-buy').style.display = 'block';
+    currentGameId = game_id;
+}
+
+function exitGame(open_games) {
+    document.getElementById('lobby').style.display = 'flex';
+    document.getElementById('play-area').style.display = 'none';
+    currentGameId = null;
+    showOpenGames(open_games);
 }
