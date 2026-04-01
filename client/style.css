@@ -148,3 +148,8 @@ button:hover {
     font-size: 0.9em;
     border: 1px solid #ddd;
 }
+
+#lobby {
+    display: flex;
+    justify-content: center;
+}

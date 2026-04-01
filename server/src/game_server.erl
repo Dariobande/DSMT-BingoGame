@@ -78,7 +78,8 @@ handle_call({leave, Username}, _From, State = #state{creator = Creator, status =
     case {Username =:= Creator, Status =:= waiting} of
         {true, true} ->
             %% Il creatore lascia e la partita è in waiting → cancelliamo la partita
-            broadcast(State#state.players, game_cancelled),
+            NewPlayers = lists:filter(fun({U, _}) -> U =/= Username end, Players),
+            broadcast(NewPlayers, game_cancelled),
             delete_game(GameId),
             {stop, normal, {game_cancelled, GameId}, State};
         _ ->

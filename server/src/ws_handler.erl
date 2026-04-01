@@ -29,6 +29,9 @@ websocket_handle(_Data, State) ->
 
 %% --- Client Actions ---
 
+handle_client_action(<<"ping">>, _Data, State) ->
+    {ok, State};
+
 %% Authenticate the user using the token provided after login
 handle_client_action(<<"authenticate">>, Data, State) ->
     Token = maps:get(<<"token">>, Data),

@@ -2,6 +2,7 @@ let currentUser = null;
 let ws = null;
 let currentGameId = null;
 let token = null;
+let pingInterval = null;
 
 // --- API HTTP ---
 
@@ -88,6 +89,13 @@ function connectWebSocket() {
             action: "authenticate",
             token: token
         }));
+
+        pingInterval = setInterval(() => {
+            if (ws.readyState === WebSocket.OPEN) {
+                // Puoi inviare una stringa semplice o un JSON
+                ws.send(JSON.stringify({ action: 'ping' })); 
+            }
+        }, 30000);
     };
 
     ws.onmessage = (event) => {
@@ -97,19 +105,20 @@ function connectWebSocket() {
 
     ws.onclose = () => {
         logMessage("Connection lost. Trying to reconnect...");
+        clearInterval(pingInterval);
         // Qui andrebbe implementata una logica di retry (utile in caso di crash di un nodo)
         setTimeout(connectWebSocket, 3000); 
     };
 }
 
 function handleServerMessage(msg) {
-    console.log("Received message:", msg.event);
+    console.log("Received message:", msg);
     switch (msg.event) {
         case "auth_success":
             showOpenGames(msg.open_games);
             break;
         case "game_created":
-            document.getElementById('lobby').style.display = 'none';
+            document.getElementById('btn-create').style.display = 'none';
             document.getElementById('play-area').style.display = 'block';
             document.getElementById('btn-start').style.display = 'inline-block';
             document.getElementById('cards-container').replaceChildren();
@@ -120,7 +129,7 @@ function handleServerMessage(msg) {
             currentGameId = msg.game_id;
             break;
         case "joined":
-            document.getElementById('lobby').style.display = 'none';
+            document.getElementById('btn-create').style.display = 'none';
             document.getElementById('play-area').style.display = 'block';
             document.getElementById('cards-container').replaceChildren();
             document.getElementById('lobby-games-list').replaceChildren();
@@ -150,7 +159,7 @@ function handleServerMessage(msg) {
             logMessage("TOMBOLA! The game is over.");
             break;
         case "leave_game":
-            document.getElementById('lobby').style.display = 'flex';
+            document.getElementById('btn-create').style.display = 'block';
             document.getElementById('play-area').style.display = 'none';
             currentGameId = null;
             showOpenGames(msg.open_games);
@@ -163,7 +172,7 @@ function handleServerMessage(msg) {
             //TODO: mostrare utenti ecc
             break;
         case "game_cancelled":
-            document.getElementById('lobby').style.display = 'flex';
+            document.getElementById('btn-create').style.display = 'block';
             document.getElementById('play-area').style.display = 'none';
             currentGameId = null;
             showOpenGames(msg.open_games);
@@ -213,7 +222,10 @@ function renderCard(grid) {
         cell.innerText = num;
         cell.onclick = () => {
             // L'utente clicca manualmente per segnare il numero [cite: 15]
-            cell.style.backgroundColor = 'lightgreen';
+            if(cell.style.backgroundColor == 'lightgreen')
+                cell.style.backgroundColor = '';
+            else
+                cell.style.backgroundColor = 'lightgreen';
         };
         cardDiv.appendChild(cell);
     });
