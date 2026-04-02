@@ -13,7 +13,7 @@
     session_token = undefined
 }).
 
-init(Req, State) ->
+init(Req, _State) ->
     %% Legge i cookie dal client durante handshake
     Cookies = cowboy_req:cookies(Req),
     SessionToken = maps:get(<<"session_token">>, Cookies, undefined),
@@ -52,7 +52,7 @@ websocket_init(State) ->
                 {aborted, Reason} ->
                     %% In caso di errore di transazione
                     io:format("Errore Mnesia websocket_init: ~p~n", [Reason]),
-                    {stop, #{reason => db_error}};
+                    {stop, #{reason => db_error}}
             end
     end.
 
@@ -71,7 +71,7 @@ handle_client_action(<<"ping">>, _Data, State) ->
     {ok, State};
 
 %% Authenticate the user using the token provided after login
-handle_client_action(<<"authenticate">>, Data, State = #ws_state{username = Username, game_id = GameId, game_pid = GamePid}) ->
+handle_client_action(<<"authenticate">>, _Data, State = #ws_state{username = Username, game_id = GameId, game_pid = GamePid}) ->
     case GameId of
         undefined -> send_lobby(State, Username);
         _ -> 
@@ -89,14 +89,15 @@ handle_client_action(<<"authenticate">>, Data, State = #ws_state{username = User
                     {reply, {text, Reply}, State#ws_state{game_pid=NewGamePid}};
                 Pid ->
                     %% TODO is_player_in_game
-                    if game_server:is_player_in_game(Pid, Username) ->
-                           %% Ricollega il giocatore alla partita
-                           {ok, GameState} = game_server:reconnect(Pid, Username, self()),
-                           Reply = jsx:encode(#{<<"event">> => <<"restore_game">>, <<"game_id">> => GameId, <<"game_state">> => GameState}),
-                           {reply, {text, Reply}, State#ws_state{game_pid=NewGamePid}};
-                       true ->
-                           %% Non autorizzato → manda lobby
-                           send_lobby(State, Username)
+                    case game_server:is_player_in_game(Pid, Username) of
+                        true ->
+                            %% Ricollega il giocatore alla partita
+                            {ok, GameState} = game_server:reconnect(Pid, Username, self()),
+                            Reply = jsx:encode(#{<<"event">> => <<"restore_game">>, <<"game_id">> => GameId, <<"game_state">> => GameState}),
+                            {reply, {text, Reply}, State#ws_state{game_pid=Pid}};
+                        false ->
+                            %% Non autorizzato → manda lobby
+                            send_lobby(State, Username)
                     end
             end
     end;

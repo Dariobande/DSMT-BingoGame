@@ -90,7 +90,7 @@ handle_info({nodeup, Node}, State) ->
         case global:whereis_name(GameId) of
             undefined ->
                 %% Processo perso → lo ricreo
-                {ok, Pid} = game_server:start(GameId, Creator),
+                {ok, _Pid} = game_server:start(GameId, Creator);
                 %% TODO restore state
                 %% gen_server:call(Pid, {restore_state, Game});
             _Pid ->

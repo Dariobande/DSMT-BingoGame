@@ -53,7 +53,7 @@ handle_auth(register, Body, _Cookies) ->
     case Password =:= ConfirmPassword of
         false ->
             io:format("[REGISTRATION] Registration failed, passwords do not match~n"),
-            {{<<"status">> => <<"error">>, <<"message">> => <<"passwords_do_not_match">>}, undefined};
+            {#{<<"status">> => <<"error">>, <<"message">> => <<"passwords_do_not_match">>}, undefined};
         true ->
             %% Procedi con Mnesia
             F = fun() ->
@@ -69,15 +69,15 @@ handle_auth(register, Body, _Cookies) ->
                         },
                         mnesia:write(NewUser),
                         io:format("[REGISTRATION] New account correctly registered: ~p~n",[Username]),
-                        {{<<"status">> => <<"ok">>, <<"message">> => <<"registered">>}, undefined};
+                        {#{<<"status">> => <<"ok">>, <<"message">> => <<"registered">>}, undefined};
                     [_Existing] ->
                         io:format("[REGISTRATION] Registration failed, username already exists: ~p~n",[Username]),
-                        {{<<"status">> => <<"error">>, <<"message">> => <<"user_exists">>}, undefined}
+                        {#{<<"status">> => <<"error">>, <<"message">> => <<"user_exists">>}, undefined}
                 end
             end,
             {atomic, {Response, MaybeSetCookie}} = mnesia:transaction(F),
             {Response, MaybeSetCookie}
-    end.
+    end;
 
 handle_auth(login, Body, Cookies) ->
     SessionToken = maps:get(<<"session_token">>, Cookies, undefined),
@@ -124,10 +124,10 @@ handle_auth(login, Body, Cookies) ->
                         end;
                     false ->
                         io:format("[LOGIN] Login authentication failed: ~p~n",[Username]),
-                        {{<<"status">> => <<"error">>, <<"message">> => <<"wrong_password">>}, undefined}
+                        {#{<<"status">> => <<"error">>, <<"message">> => <<"wrong_password">>}, undefined}
                 end;
             [] ->
-                {{<<"status">> => <<"error">>, <<"message">> => <<"user_not_found">>}, undefined}
+                {#{<<"status">> => <<"error">>, <<"message">> => <<"user_not_found">>}, undefined}
         end
     end,
 

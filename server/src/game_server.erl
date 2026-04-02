@@ -94,8 +94,8 @@ init([GameId, Creator]) ->
             FinalState = case RecoveredState#state.status of
                 playing ->
                     Ref = erlang:send_after(?DRAW_INTERVAL, self(), draw_number),
-                    RecoveredState#state{timerref = Ref};
-                 ->
+                    RecoveredState#state{timer_ref = Ref};
+                _ ->
                     RecoveredState
             end,
 
@@ -231,7 +231,7 @@ handle_call({reconnect, Username, NewWsPid}, _From, State = #state{players = Pla
             io:format("[RECONNECT] Non-Player tried to reconnect: ~p~n",[Username]),
             {reply, {error, not_in_game}, State};
 
-        {_Username, OldWsPid} ->
+        {_Username, _OldWsPid} ->
             erlang:monitor(process, NewWsPid),
 
             %% Sostituisci il vecchio WS PID con quello nuovo
@@ -276,7 +276,6 @@ handle_info(draw_number, State = #state{status = playing, drawn = Drawn}) ->
     end;
 
 handle_info({'DOWN', _Ref, process, DeadPid, _Reason}, State = #state{players = Players}) ->
-    io:format("[DISCONNECT] Connection lost with player: ~p~n",[Username]),
     case lists:keyfind(DeadPid, 2, Players) of
         false ->
             %% Non era un player → ignora
