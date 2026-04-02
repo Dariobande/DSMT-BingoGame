@@ -8,7 +8,7 @@
     balance         %% Denaro in-game
 }).
 
--record(session, {token, username}).
+-record(session, {token, username, game_id, last_active}).
 
 %% Tabella Partite
 -record(game, {

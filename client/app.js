@@ -1,6 +1,6 @@
 let currentUser = null;
 let ws = null;
-let currentGameId = null;
+let currentGameId = undefined;
 let token = null;
 let pingInterval = null;
 let clickCells = false;
@@ -69,6 +69,7 @@ async function login() {
         document.getElementById('user-display').innerText = currentUser;
         document.getElementById('balance-display').innerText = data.balance;
         token = data.token;
+        currentGameID = data.game_id;
         
         // Inizializza la connessione WebSocket
         connectWebSocket();
@@ -87,8 +88,7 @@ function connectWebSocket() {
         logMessage("Connected to server.");
 
         ws.send(JSON.stringify({
-            action: "authenticate",
-            token: token
+            action: "authenticate"
         }));
 
         pingInterval = setInterval(() => {
@@ -115,9 +115,6 @@ function connectWebSocket() {
 function handleServerMessage(msg) {
     console.log("Received message:", msg);
     switch (msg.event) {
-        case "auth_success":
-            showOpenGames(msg.open_games);
-            break;
         case "game_created":
             document.getElementById('players-count-game').innerText = "1";
             document.getElementById('btn-start').style.display = 'inline-block';
@@ -156,25 +153,40 @@ function handleServerMessage(msg) {
         case "game_over":
             logMessage("TOMBOLA! The game is over.");
             break;
+        case "show_open_games":
         case "leave_game":
             exitGame(msg.open_games)
             break;
-        case "user_joined":
+        case "user_reconnected":
             const playersCountJoin = document.getElementById('players-count-game');
+            playersCountJoin.innerText = parseInt(playersCountJoin.innerText) + 1;
+            logMessage(`${msg.user} reconnected to the game.`);
+            break;
+        case "user_joined":
+            playersCountJoin = document.getElementById('players-count-game');
             playersCountJoin.innerText = parseInt(playersCountJoin.innerText) + 1;
             logMessage(`${msg.user} joined the game.`);
             break;
-        case "user_left":
+        case "user_disconnected":
             const playersCountLeave = document.getElementById('players-count-game');
             playersCountLeave.innerText = parseInt(playersCountLeave.innerText) - 1;
+            logMessage(`${msg.user} disconnected from the game.`);
+            break;
+        case "user_left":
+            playersCountLeave = document.getElementById('players-count-game');
+            playersCountLeave.innerText = parseInt(playersCountLeave.innerText) - 1;
             logMessage(`${msg.user} left the game.`);
-            //TODO: mostrare utenti ecc
             break;
         case "game_cancelled":
             exitGame(msg.open_games)
             break;
-        case "show_open_games":
-            showOpenGames(msg.open_games);
+        case "restore_game":
+            // TODO ripristinare cartelle del coglione
+            enterGame(msg.game_id);
+            document.getElementById('controls').style.display = 'flex';
+            document.getElementById('btn-buy').style.display = 'none';
+            document.getElementById('btn-start').style.display = 'none';
+            logMessage(`Reconnected to the game.`);
             break;
         case "error":
             showError(msg.reason);
@@ -290,7 +302,7 @@ function exitGame(open_games) {
     document.getElementById('lobby').style.display = 'flex';
     document.getElementById('play-area').style.display = 'none';
     clickCells = false;
-    currentGameId = null;
+    currentGameId = undefined;
     showOpenGames(open_games);
 }
 

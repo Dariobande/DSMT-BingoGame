@@ -8,15 +8,53 @@
 %% State of the WS connection
 -record(ws_state, {
     username = undefined,
-    game_pid = undefined
+    game_id = undefined,
+    game_pid = undefined,
+    session_token = undefined
 }).
 
 init(Req, State) ->
-    %% Upgrade the HTTP request to a WebSocket connection 
-    {cowboy_websocket, Req, State}.
+    %% Legge i cookie dal client durante handshake
+    Cookies = cowboy_req:cookies(Req),
+    SessionToken = maps:get(<<"session_token">>, Cookies, undefined),
 
-websocket_init(_State) ->
-    {ok, #ws_state{}}.
+    %% Upgrade the HTTP request to a WebSocket connection
+    {cowboy_websocket, Req, #{session_token => SessionToken}}.
+
+websocket_init(State) ->
+    %% Ottieni il token dal state
+    Token = maps:get(session_token, State, undefined),
+
+    %% Se non c'è token, lo state resta vuoto
+    case Token of
+        undefined ->
+            {stop, #{reason => no_token}};
+        _ ->
+            F = fun() ->
+                    case mnesia:read({session, Token}) of
+                        [#session{username=Username, game_id=GameId}] ->
+                            {ok, Username, GameId};
+                        [] ->
+                            {error, not_found}
+                    end
+                end,
+            case mnesia:transaction(F) of
+                {atomic, {ok, Username, GameId}} ->
+                    %% Trova PID della partita se esiste
+                    {ok, #ws_state{
+                        username = Username,
+                        game_id = GameId,
+                        game_pid = resolve_game_pid(GameId),
+                        session_token = Token
+                    }};
+                {atomic, {error, not_found}} ->
+                    {stop, #{reason => token_not_found}};
+                {aborted, Reason} ->
+                    %% In caso di errore di transazione
+                    io:format("Errore Mnesia websocket_init: ~p~n", [Reason]),
+                    {stop, #{reason => db_error}};
+            end
+    end.
 
 %% Handle incoming JSON messages from the Client via WebSocket
 websocket_handle({text, Msg}, State) ->
@@ -33,18 +71,34 @@ handle_client_action(<<"ping">>, _Data, State) ->
     {ok, State};
 
 %% Authenticate the user using the token provided after login
-handle_client_action(<<"authenticate">>, Data, State) ->
-    Token = maps:get(<<"token">>, Data),
-    %% Andiamo a cercare il token nel database
-    case mnesia:dirty_read(session, Token) of
-        [#session{username = Username}] ->
-            AvailableGames = find_open_games(),
-            %% Token valido! Promuoviamo lo State associandogli il VERO username
-            Reply = jsx:encode(#{ <<"event">> => <<"auth_success">>, <<"open_games">> => AvailableGames }),
-            {reply, {text, Reply}, State#ws_state{username = Username}};
-        [] ->
-            %% Token falso o inesistente: Cacciamo l'impostore chiudendo la connessione
-            {stop, State}
+handle_client_action(<<"authenticate">>, Data, State = #ws_state{username = Username, game_id = GameId, game_pid = GamePid}) ->
+    case GameId of
+        undefined -> send_lobby(State, Username);
+        _ -> 
+            case GamePid of
+                undefined ->
+                    %% Partita non esiste → ritiriamo su
+                    {ok, NewGamePid} = game_server:start(GameId, Username),
+                    %% ritornare le cartelle del cazzo al coglione
+                    %% ritornare numeri estratti al coglione
+                    %% ritornare anche combinazioni vincenti uscite
+                    %% aggiornare WSPID dell'utente riconnesso
+                    %% TODO tutto implementato in reconnect
+                    {ok, GameState} = game_server:reconnect(NewGamePid, Username, self()),
+                    Reply = jsx:encode(#{<<"event">> => <<"restore_game">>, <<"game_id">> => GameId, <<"game_state">> => GameState}),
+                    {reply, {text, Reply}, State#ws_state{game_pid=NewGamePid}};
+                Pid ->
+                    %% TODO is_player_in_game
+                    if game_server:is_player_in_game(Pid, Username) ->
+                           %% Ricollega il giocatore alla partita
+                           {ok, GameState} = game_server:reconnect(Pid, Username, self()),
+                           Reply = jsx:encode(#{<<"event">> => <<"restore_game">>, <<"game_id">> => GameId, <<"game_state">> => GameState}),
+                           {reply, {text, Reply}, State#ws_state{game_pid=NewGamePid}};
+                       true ->
+                           %% Non autorizzato → manda lobby
+                           send_lobby(State, Username)
+                    end
+            end
     end;
 
 %% 2. LA GUARDIA SVIZZERA (Protezione delle altre funzioni)
@@ -69,13 +123,14 @@ handle_client_action(<<"create_game">>, _Data, State = #ws_state{game_pid = unde
     GameId = binary:encode_hex(RawBytes),
     
     %% Start the game_server process locally on this node
-    {ok, GamePid} = game_server:start_link(GameId, Username),
+    {ok, GamePid} = game_server:start(GameId, Username),
     game_server:join(GamePid, Username, self()),
 
     io:format("~n[CREAZIONE] Ho creato la partita con ID esatto: ~p~n", [GameId]),
     io:format("[CREAZIONE] Il PID della partita è: ~p~n", [GamePid]),
     io:format("[CREAZIONE] I nomi globali ora sono: ~p~n~n", [global:registered_names()]),
     
+    update_game_id(State#ws_state.session_token, GameId),
     Reply = jsx:encode(#{<<"event">> => <<"game_created">>, <<"game_id">> => GameId}),
     {reply, {text, Reply}, State#ws_state{username = Username, game_pid = GamePid}};
     
@@ -102,6 +157,7 @@ handle_client_action(<<"join_game">>, Data, State) ->
         GamePid ->
             %% Found the game, join it
             {ok, PlayerCount} = game_server:join(GamePid, Username, self()),
+            update_game_id(State#ws_state.session_token, GameId),
             Reply = jsx:encode(#{<<"event">> => <<"joined">>, <<"game_id">> => GameId, <<"player_count">> => PlayerCount}),
             
             %% Update state of the WS connection with the username and game PID
@@ -117,6 +173,7 @@ handle_client_action(_Action, _Data, State = #ws_state{game_pid = undefined}) ->
 %% Leave an existing game
 handle_client_action(<<"leave_game">>, _Data, State = #ws_state{username = User, game_pid = GamePid}) ->   
     game_server:leave(GamePid, User),
+    update_game_id(State#ws_state.session_token, undefined),
     AvailableGames = find_open_games(),
     Reply = jsx:encode(#{<<"event">> => <<"leave_game">>, <<"open_games">> => AvailableGames}),
     
@@ -161,7 +218,16 @@ find_open_games() ->
     
     %% 2. Chiediamo a Mnesia di trovare tutti i record che matchano
     OpenGamesRecords = mnesia:dirty_match_object(game, Pattern),
-    LimitedGames = lists:sublist(OpenGamesRecords, 10),
+
+    %% Filtra solo quelli con processo attivo GLOBALMENTE
+    ActiveGames = lists:filter(fun(Game) ->
+        GameId = Game#game.game_id,
+        case global:whereis_name(GameId) of
+            undefined -> false;
+            _Pid -> true
+        end
+    end, OpenGamesRecords),
+    LimitedGames = lists:sublist(ActiveGames, 10),
     
     %% 3. jsx non sa leggere i record di Erlang, quindi li trasformiamo 
     %% in una comoda lista di mappe!
@@ -173,6 +239,32 @@ find_open_games() ->
             <<"player_count">> => length(Game#game.players)
         }
     end, LimitedGames).
+
+update_game_id(Token, NewGameId) ->
+    F = fun() ->
+        case mnesia:read(session, Token) of
+            [] -> 
+                {error, not_found};
+            [Record] ->
+                Now = erlang:system_time(second),
+                NewRecord = Record#session{game_id = NewGameId, last_active = Now},
+                mnesia:write(NewRecord),
+                {ok, NewRecord}
+        end
+    end,
+    mnesia:transaction(F).
+
+resolve_game_pid(undefined) -> undefined;
+resolve_game_pid(GameId) ->
+    case global:whereis_name(GameId) of
+        undefined -> undefined;
+        Pid -> Pid
+    end.
+
+send_lobby(State, Username) ->
+    AvailableGames = find_open_games(),
+    Reply = jsx:encode(#{<<"event">> => <<"show_open_games">>, <<"open_games">> => AvailableGames}),
+    {reply, {text, Reply}, State#ws_state{username=Username, game_pid=undefined, game_id = undefined}}.
 
 %% Handle incoming Erlang messages from the game_server
 %% These are the broadcasts (number drawn, game started, etc.)
@@ -194,6 +286,14 @@ websocket_info({game_event, game_over}, State) ->
 
 websocket_info({game_event, {user_left, User}}, State) ->
     Payload = jsx:encode(#{<<"event">> => <<"user_left">>, <<"user">> => list_to_binary(User)}),
+    {reply, {text, Payload}, State};
+
+websocket_info({game_event, {user_reconnected, User}}, State) ->
+    Payload = jsx:encode(#{<<"event">> => <<"user_reconnected">>, <<"user">> => list_to_binary(User)}),
+    {reply, {text, Payload}, State};
+
+websocket_info({game_event, {user_disconnected, User}}, State) ->
+    Payload = jsx:encode(#{<<"event">> => <<"user_disconnected">>, <<"user">> => list_to_binary(User)}),
     {reply, {text, Payload}, State};
 
 websocket_info({game_event, {user_joined, User}}, State) ->

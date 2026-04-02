@@ -4,7 +4,7 @@
 -include("../include/bingo_records.hrl").
 
 %% API
--export([start_link/2, join/3, buy_card/2, start_game/2, claim_win/4, leave/2]).
+-export([start/2, join/3, buy_card/2, start_game/2, claim_win/4, leave/2, is_player_in_game/2, reconnect/3]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
@@ -28,8 +28,8 @@
 %% --- API ---
 
 %% Starts a new game process
-start_link(GameId, Creator) ->
-    gen_server:start_link({global, GameId}, ?MODULE, [GameId, Creator], []).
+start(GameId, Creator) ->
+    gen_server:start({global, GameId}, ?MODULE, [GameId, Creator], []).
 
 %% User joins the game. WsPid is the Cowboy WebSocket process PID for broadcasting.
 join(GamePid, Username, WsPid) ->
@@ -51,24 +51,60 @@ start_game(GamePid, Username) ->
 claim_win(GamePid, Username, Combination, CardId) ->
     gen_server:call(GamePid, {claim_win, Username, Combination, CardId}).
 
+%% Check if a player is in game
+is_player_in_game(GamePid, Username) ->
+    gen_server:call(GamePid, {is_player_in_game, Username}).
+
+%% Reconnect to started game
+reconnect(GamePid, Username, NewWsPid) ->
+    gen_server:call(GamePid, {reconnect, Username, NewWsPid}).
+
 
 %% --- Callbacks ---
 
 init([GameId, Creator]) ->
-    %% Initialize the game state in Mnesia
-    InitialState = #state{
-        game_id = GameId, 
-        creator = Creator,
-        status = waiting,
-        drawn = [],
-        pot = 0,
-        players = [],
-        won_combinations = []
-    },
-    update_db(InitialState),
-    {ok, InitialState}.
+    %% 1. Controlliamo se la partita esiste già nel Database
+    case mnesia:dirty_read(game, GameId) of
+        [] ->
+            %% CASO A: Nuova Partita! (Comportamento classico)
+            io:format("[CREATE] Nuova partita creata da: ~p~n", [Creator]),
+            InitialState = #state{
+                game_id = GameId, creator = Creator, status = waiting,
+                drawn = [], pot = 0, players = [], won_combinations = []
+            },
+            update_db(InitialState),
+            {ok, InitialState};
+
+        [ExistingRecord] ->
+            %% CASO B: Recupero post-crash! (Resurrezione)
+            io:format("[RECOVERY] Recupero stato partita: ~p~n", [GameId]),
+
+            %% Traduciamo il record di Mnesia nello State del gen_server
+            RecoveredState = #state{
+                game_id = ExistingRecord#game.game_id,
+                creator = ExistingRecord#game.creator,
+                status = ExistingRecord#game.status,
+                players = ExistingRecord#game.players,
+                drawn = ExistingRecord#game.drawn_numbers,
+                pot = ExistingRecord#game.pot,
+                won_combinations = ExistingRecord#game.won_combinations
+            },
+
+            %% Se la partita era 'playing' quando è crashata, facciamo ripartire il timer!
+            FinalState = case RecoveredState#state.status of
+                playing ->
+                    Ref = erlang:send_after(?DRAW_INTERVAL, self(), draw_number),
+                    RecoveredState#state{timerref = Ref};
+                 ->
+                    RecoveredState
+            end,
+
+            {ok, FinalState}
+    end.
 
 handle_call({join, Username, WsPid}, _From, State = #state{status = waiting, players = Players}) ->
+    io:format("[JOIN] New player joined the game: ~p~n",[Username]),
+    erlang:monitor(process, WsPid),
     broadcast(Players, {user_joined, Username}),
     %% Update state with new player and their WebSocket PID
     NewPlayers = [{Username, WsPid} | proplists:delete(Username, Players)],
@@ -82,6 +118,7 @@ handle_call({join, Username, WsPid}, _From, State = #state{status = waiting, pla
 handle_call({leave, Username}, _From, State = #state{creator = Creator, status = Status, players = Players, game_id = GameId}) ->
     case {Username =:= Creator, Status =:= waiting} of
         {true, true} ->
+            io:format("[LEAVE] Creator left unstarted game, game cancelled~n"),
             %% Il creatore lascia e la partita è in waiting → cancelliamo la partita
             delete_game(GameId),
             NewPlayers = lists:filter(fun({U, _}) -> U =/= Username end, Players),
@@ -89,6 +126,7 @@ handle_call({leave, Username}, _From, State = #state{creator = Creator, status =
             {stop, normal, {game_cancelled, GameId}, State};
         _ ->
             %% Rimuovi il giocatore dalla lista (sia creatore dopo l'inizio del gioco sia giocatore normale)
+            io:format("[LEAVE] Player left the game: ~p~n",[Username]),
             NewPlayers = lists:filter(fun({U, _}) -> U =/= Username end, Players),
             broadcast(NewPlayers, {user_left, Username}),
 
@@ -114,9 +152,14 @@ handle_call({buy_card, Username}, _From, State = #state{game_id = GameId, pot = 
                 CardId = make_ref(),
                 NewCard = #card{card_id = CardId, user_id = Username, game_id = GameId, grid = Numbers, combinations_won = []},
                 mnesia:write(NewCard),
+                io:format("[BUY] Player bought a card: ~p~n",[Username]),
                 {ok, NewCard, NewBalance};
-            CardsCount >= ?MAX_CARDS -> {error, max_cards_reached};
-            true -> {error, insufficient_funds}
+            CardsCount >= ?MAX_CARDS -> 
+                io:format("[BUY] Player failed to buy a card due to max limit: ~p~n",[Username]),
+                {error, max_cards_reached};
+            true -> 
+                io:format("[BUY] Player failed to buy a card due to insufficient funds: ~p~n",[Username]),
+                {error, insufficient_funds}
         end
     end,
     case mnesia:transaction(F) of
@@ -137,6 +180,7 @@ handle_call({start_game, Username}, _From, State = #state{creator = Creator, sta
     
     %% Notify all players
     broadcast(State#state.players, {game_started, State#state.pot}),
+    io:format("[START] Game started~n"),
     
     {reply, ok, State#state{status = playing, timer_ref = Ref}};
 
@@ -174,6 +218,35 @@ handle_call({claim_win, Username, Comb, CardId}, _From, State = #state{status = 
             end
     end;
 
+handle_call({is_player_in_game, Username}, _From, State = #state{players = Players}) ->
+    case lists:keyfind(Username, 1, Players) of
+        false -> {reply, false, State};
+        {_Username, _Pid} -> {reply, true, State}
+    end;
+
+handle_call({reconnect, Username, NewWsPid}, _From, State = #state{players = Players}) ->
+    case lists:keyfind(Username, 1, Players) of
+        false ->
+            %% Il player non è nella partita → errore
+            io:format("[RECONNECT] Non-Player tried to reconnect: ~p~n",[Username]),
+            {reply, {error, not_in_game}, State};
+
+        {_Username, OldWsPid} ->
+            erlang:monitor(process, NewWsPid),
+
+            %% Sostituisci il vecchio WS PID con quello nuovo
+            NewPlayers = lists:keyreplace(Username, 1, Players, {Username, NewWsPid}),
+
+            %% notifica riconnessione agli altri
+            broadcast(NewPlayers, {user_reconnected, Username}),
+
+            NewState = State#state{players = NewPlayers},
+            update_db(NewState),
+
+            io:format("[RECONNECT] Player correctly reconnected: ~p~n",[Username]),
+            {reply, ok, NewState}
+    end;
+
 handle_call(_Request, _From, State) ->
     {reply, {error, unknown_request}, State}.
 
@@ -200,6 +273,27 @@ handle_info(draw_number, State = #state{status = playing, drawn = Drawn}) ->
             
             Ref = erlang:send_after(?DRAW_INTERVAL, self(), draw_number),
             {noreply, State#state{drawn = NewDrawn, timer_ref = Ref}}
+    end;
+
+handle_info({'DOWN', _Ref, process, DeadPid, _Reason}, State = #state{players = Players}) ->
+    io:format("[DISCONNECT] Connection lost with player: ~p~n",[Username]),
+    case lists:keyfind(DeadPid, 2, Players) of
+        false ->
+            %% Non era un player → ignora
+            {noreply, State};
+
+        {Username, DeadPid} ->
+            io:format("Player ~p disconnesso (~p)~n", [Username, DeadPid]),
+
+            NewPlayers = lists:keyreplace(Username, 1, Players, {Username, disconnected}),
+
+            %% Notifica agli altri
+            broadcast(NewPlayers, {user_disconnected, Username}),
+
+            NewState = State#state{players = NewPlayers},
+            update_db(NewState),
+
+            {noreply, NewState}
     end;
 
 handle_info(_Info, State) ->
@@ -286,7 +380,8 @@ update_db(State) ->
         status  = State#state.status,
         players = State#state.players,
         drawn_numbers = State#state.drawn,
-        pot = State#state.pot
+        pot = State#state.pot,
+        won_combinations = State#state.won_combinations
     },
     
     %% Scriviamo su Mnesia. Usiamo dirty_write perché è velocissimo in RAM

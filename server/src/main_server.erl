@@ -5,6 +5,9 @@
 
 -export([start_link/1, init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
+-define(CLEANUP_INTERVAL, 3600000).
+-define(SESSION_TIMEOUT, 86400).
+
 %% Lo stato mantiene la lista dei nodi da monitorare
 -record(state, {cowboy_nodes = []}).
 
@@ -26,6 +29,8 @@ init(Nodes) ->
     AllNodes = [node() | Nodes],
     db_manager:init_cluster_db(AllNodes),
     
+    erlang:send_after(?CLEANUP_INTERVAL, self(), clean_old_sessions),
+
     {ok, #state{cowboy_nodes = Nodes}}.
 
 handle_call(_Request, _From, State) ->
@@ -33,6 +38,43 @@ handle_call(_Request, _From, State) ->
 
 handle_cast(_Msg, State) ->
     {noreply, State}.
+
+%% Il timer è scattato! È ora di pulire.
+handle_info(clean_old_sessions, State) ->
+    io:format("[GARBAGE COLLECTOR] Inizio pulizia sessioni vecchie...~n"),
+
+    Now = erlang:system_time(second),
+    ExpirationTime = Now - ?SESSION_TIMEOUT,
+
+    %% Funzione che scorre le sessioni una per una
+    F = fun() ->
+        mnesia:foldl(
+            fun(SessionRecord, Counter) ->
+                if 
+                    SessionRecord#session.last_active < ExpirationTime ->
+                        %% È troppo vecchia! Eliminiamola.
+                        mnesia:delete({session, SessionRecord#session.token}),
+                        Counter + 1; %% Contiamo quante ne eliminiamo
+                    true -> 
+                        Counter %% La sessione è valida, andiamo avanti
+                end
+            end, 
+            0, %% Il contatore parte da 0
+            session %% Il nome della tabella
+        )
+    end,
+
+    case mnesia:transaction(F) of
+        {atomic, DeletedCount} ->
+            io:format("[GARBAGE COLLECTOR] Pulizia completata! Rimosse ~p sessioni fantasma.~n", [DeletedCount]);
+        {aborted, Reason} ->
+            io:format("[GARBAGE COLLECTOR] Errore durante la pulizia: ~p~n", [Reason])
+    end,
+
+    %% Ricarichiamo la sveglia per il prossimo giro!
+    erlang:send_after(?CLEANUP_INTERVAL, self(), clean_old_sessions),
+
+    {noreply, State};
 
 %% Gestione eventi di Node Up e Node Down
 handle_info({nodeup, Node}, State) ->
@@ -48,8 +90,9 @@ handle_info({nodeup, Node}, State) ->
         case global:whereis_name(GameId) of
             undefined ->
                 %% Processo perso → lo ricreo
-                {ok, Pid} = game_server:start_link(GameId, Creator),
-                gen_server:call(Pid, {restore_state, Game});
+                {ok, Pid} = game_server:start(GameId, Creator),
+                %% TODO restore state
+                %% gen_server:call(Pid, {restore_state, Game});
             _Pid ->
                 %% Esiste già → skip
                 ok
