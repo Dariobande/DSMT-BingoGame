@@ -99,11 +99,9 @@ handle_client_action(<<"authenticate">>, _Data, State = #ws_state{username = Use
                     }),
                     {reply, {text, Reply}, State#ws_state{game_pid=NewGamePid}};
                 Pid ->
-                    %% TODO is_player_in_game
-                    case game_server:is_player_in_game(Pid, Username) of
-                        true ->
+                    case game_server:reconnect(Pid, Username, self()) of
+                        {ok, Cards, Drawn, Won} ->
                             %% Ricollega il giocatore alla partita
-                            {ok, Cards, Drawn, Won} = game_server:reconnect(Pid, Username, self()),
                             io:format("[WS-INFO] Reconnected to game: ~p~n", [Username]),
                             Reply = jsx:encode(#{
                                 <<"event">> => <<"restore_game">>, 
@@ -113,8 +111,8 @@ handle_client_action(<<"authenticate">>, _Data, State = #ws_state{username = Use
                                 <<"won">> => Won
                             }),
                             {reply, {text, Reply}, State#ws_state{game_pid=Pid}};
-                        false ->
-                            io:format("[WARNING] User tried to connect to another game: ~p~n", [Username]),
+                        {error, Reason} ->
+                            io:format("[WARNING] User [~p] failed to reconnect: ~p~n", [Username, Reason]),
                             io:format("[WS-INFO] Lobby access permitted: ~p~n", [Username]),
                             %% Non autorizzato → manda lobby
                             send_lobby(State, Username)
@@ -127,7 +125,7 @@ handle_client_action(<<"authenticate">>, _Data, State = #ws_state{username = Use
 handle_client_action(_Action, _Data, State = #ws_state{username = undefined}) ->
     %% ...lo blocchiamo restituendo un errore!
     io:format("[WARNING] Game operation without being logged~n"),
-    Reply = jsx:encode(#{<<"event">> => <<"error">>, <<"message">> => <<"Non sei autenticato!">>}),
+    Reply = jsx:encode(#{<<"event">> => <<"error">>, <<"reason">> => <<"Please login again">>}),
     {reply, {text, Reply}, State};
 
 handle_client_action(<<"search_open_games">>, _Data, State = #ws_state{username = Username, game_pid = undefined}) ->
@@ -137,7 +135,7 @@ handle_client_action(<<"search_open_games">>, _Data, State = #ws_state{username 
     {reply, {text, Reply}, State};
 
 %% Create a new game
-handle_client_action(<<"create_game">>, _Data, State = #ws_state{username = Username, game_pid = undefined}) ->
+handle_client_action(<<"create_game">>, _Data, State = #ws_state{username = Username, game_pid = undefined, game_id = undefined}) ->
     %% Genera un GameId unico 
     RawBytes = crypto:strong_rand_bytes(8),
     GameId = binary:encode_hex(RawBytes),
@@ -152,14 +150,14 @@ handle_client_action(<<"create_game">>, _Data, State = #ws_state{username = User
     Reply = jsx:encode(#{<<"event">> => <<"game_created">>, <<"game_id">> => GameId}),
     {reply, {text, Reply}, State#ws_state{username = Username, game_pid = GamePid}};
     
-handle_client_action(<<"create_game">>, _Data, State = #ws_state{username = Username, game_pid = _Pid}) ->
+handle_client_action(<<"create_game">>, _Data, State = #ws_state{username = Username, game_pid = _Pid, game_id = _GameId}) ->
     %% l'utente è già in gioco
     io:format("[WARNING] User tried to create a new game while already being in a game: ~p~n", [Username]),
-    Reply = jsx:encode(#{<<"event">> => <<"error">>, <<"message">> => <<"Sei già in una partita!">>}),
+    Reply = jsx:encode(#{<<"event">> => <<"error">>, <<"reason">> => <<"You are already in game!">>}),
     {reply, {text, Reply}, State};
 
 %% Join an existing game
-handle_client_action(<<"join_game">>, Data, State = #ws_state{username = Username}) ->
+handle_client_action(<<"join_game">>, Data, State = #ws_state{username = Username, game_pid = undefined, game_id = undefined}) ->
     GameId = maps:get(<<"game_id">>, Data),
 
     %% Search for the game process using the global registry
@@ -172,31 +170,49 @@ handle_client_action(<<"join_game">>, Data, State = #ws_state{username = Usernam
             
         GamePid ->
             %% Found the game, join it
-            {ok, PlayerCount} = game_server:join(GamePid, Username, self()),
-            io:format("[WS-INFO] User joined a new game: ~p~n", [Username]),
-            update_game_id(State#ws_state.session_token, GameId),
-            Reply = jsx:encode(#{<<"event">> => <<"joined">>, <<"game_id">> => GameId, <<"player_count">> => PlayerCount}),
-            %% Update state of the WS connection with the username and game PID
-            {reply, {text, Reply}, State#ws_state{username = Username, game_pid = GamePid}}
+            case game_server:join(GamePid, Username, self()) of
+                {ok, PlayerCount} -> 
+                    io:format("[WS-INFO] User joined a new game: ~p~n", [Username]),
+                    update_game_id(State#ws_state.session_token, GameId),
+                    Reply = jsx:encode(#{<<"event">> => <<"joined">>, <<"game_id">> => GameId, <<"player_count">> => PlayerCount}),
+                    %% Update state of the WS connection with the username and game PID
+                    {reply, {text, Reply}, State#ws_state{username = Username, game_pid = GamePid}};
+                {error, Reason} ->
+                    io:format("[WARNING] User [~p] join failed: ~p~n", [Username, Reason]),
+                    Reply = jsx:encode(#{<<"event">> => <<"error">>,  <<"reason">> => atom_to_binary(Reason, utf8)}),
+                    {reply, {text, Reply}, State}
+            end
     end;
+
+handle_client_action(<<"join_game">>, _Data, State = #ws_state{username = Username, game_pid = _Pid, game_id = _GameId}) ->
+    %% l'utente è già in gioco
+    io:format("[WARNING] User tried to join a new game while already being in a game: ~p~n", [Username]),
+    Reply = jsx:encode(#{<<"event">> => <<"error">>, <<"reason">> => <<"You are already in game!">>}),
+    {reply, {text, Reply}, State};
 
 %% Handle undefined game
 handle_client_action(_Action, _Data, State = #ws_state{username = Username, game_pid = undefined}) ->
     %% ...lo blocchiamo restituendo un errore!
-    io:format("[WARNING] User tried to do an operation on non existing game: ~p~n", [Username]),
-    Reply = jsx:encode(#{<<"event">> => <<"error">>, <<"message">> => <<"You are not in game!">>}),
+    io:format("[WARNING] User tried to do a game operation on non existing game: ~p~n", [Username]),
+    Reply = jsx:encode(#{<<"event">> => <<"error">>, <<"reason">> => <<"You are not in game!">>}),
     {reply, {text, Reply}, State};
 
 %% Leave an existing game
 handle_client_action(<<"leave_game">>, _Data, State = #ws_state{username = User, game_pid = GamePid}) ->   
-    game_server:leave(GamePid, User),
-    io:format("[WS-INFO] User left the game: ~p~n", [User]),
-    update_game_id(State#ws_state.session_token, undefined),
-    AvailableGames = find_open_games(),
-    Reply = jsx:encode(#{<<"event">> => <<"leave_game">>, <<"open_games">> => AvailableGames}),
-    
-    %% Update state of the WS connection: remove game PID
-    {reply, {text, Reply}, State#ws_state{username = User, game_pid = undefined}};
+    case game_server:leave(GamePid, User) of
+        {ok, Balance} -> 
+            io:format("[WS-INFO] User left the game: ~p~n", [User]),
+            update_game_id(State#ws_state.session_token, undefined),
+            AvailableGames = find_open_games(),
+            Reply = jsx:encode(#{<<"event">> => <<"leave_game">>, <<"open_games">> => AvailableGames, <<"balance">> => Balance}),
+            
+            %% Update state of the WS connection: remove game PID
+            {reply, {text, Reply}, State#ws_state{username = User, game_pid = undefined}};
+        {error, Reason} ->
+            io:format("[WARNING] User denied to buy a card: ~p~n", [User]),
+            Reply = jsx:encode(#{<<"event">> => <<"error">>, <<"reason">> => atom_to_binary(Reason, utf8)}),
+            {reply, {text, Reply}, State}
+    end;
 
 %% Buy a card
 handle_client_action(<<"buy_card">>, _Data, State = #ws_state{username = User, game_pid = Pid}) ->

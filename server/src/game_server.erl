@@ -103,37 +103,76 @@ init([GameId, Creator]) ->
     end.
 
 handle_call({join, Username, WsPid}, _From, State = #state{status = waiting, players = Players}) ->
-    io:format("[JOIN] New player joined the game: ~p~n",[Username]),
-    erlang:monitor(process, WsPid),
-    broadcast(Players, {user_joined, Username}),
-    %% Update state with new player and their WebSocket PID
-    NewPlayers = [{Username, WsPid} | proplists:delete(Username, Players)],
-    PlayerCount = length(NewPlayers),
+    case lists:keyfind(Username, 1, Players) of
+        false ->
+            io:format("[JOIN] New player joined the game: ~p~n",[Username]),
+            erlang:monitor(process, WsPid),
+            broadcast(Players, {user_joined, Username}),
+            %% Update state with new player and their WebSocket PID
+            NewPlayers = [{Username, WsPid} | proplists:delete(Username, Players)],
+            PlayerCount = length(NewPlayers),
 
-    NewState = State#state{players = NewPlayers},
-    update_db(NewState),
+            NewState = State#state{players = NewPlayers},
+            update_db(NewState),
 
-    {reply, {ok, PlayerCount}, NewState};
+            {reply, {ok, PlayerCount}, NewState};
+        {_Username, _OldPid} ->
+            %% Già presente → opzionale: reconnect soft
+            io:format("[WARNING] Player already in game: ~p~n",[Username]),
+            {reply, {error, player_already_in_game}, State};
+    end;
 
-handle_call({leave, Username}, _From, State = #state{creator = Creator, status = Status, players = Players, game_id = GameId}) ->
-    case {Username =:= Creator, Status =:= waiting} of
-        {true, true} ->
-            io:format("[LEAVE] Creator left unstarted game, game cancelled~n"),
-            %% Il creatore lascia e la partita è in waiting → cancelliamo la partita
-            delete_game(GameId),
-            NewPlayers = lists:filter(fun({U, _}) -> U =/= Username end, Players),
-            broadcast(NewPlayers, game_cancelled),
-            {stop, normal, {game_cancelled, GameId}, State};
-        _ ->
+handle_call({join, Username, WsPid}, _From, State = #state{status = Status}) ->
+    io:format("[WARNING] Player tried to join game not in waiting room: ~p~n",[Username]),
+    {reply, {error, game_already_started}, State};
+
+handle_call({leave, Username}, _From, State = #state{creator = Creator, status = waiting, players = Players, game_id = GameId}) ->
+    case lists:keyfind(Username, 1, Players) of
+        false ->
+            %% Non presente
+            io:format("[WARNING] Player not in game tried to leave: ~p~n",[Username]),
+            {reply, {error, player_not_in_game}, State};
+        {_Username, _Pid} ->
+            %% TODO gestione cartelle da rimborsare e rimuovere
+            NewBalance = check_player_cards(Username, ...),
+            case Username =:= Creator of
+                true -> 
+                    io:format("[LEAVE] Creator left unstarted game, game cancelled~n"),
+                    %% Il creatore lascia e la partita è in waiting → cancelliamo la partita
+                    delete_game(GameId),
+                    %% TODO rimuovere tutti i giocatori ma anche le loro cartelle e rimborsare correttamente
+                    NewPlayers = lists:filter(fun({U, _}) -> U =/= Username end, Players),
+                    broadcast(NewPlayers, game_cancelled),
+                    {stop, normal, {game_cancelled, GameId}, State};
+                _ -> 
+                    %% Rimuovi il giocatore dalla lista (sia creatore dopo l'inizio del gioco sia giocatore normale)
+                    io:format("[LEAVE] Player left the game in waiting room: ~p~n",[Username]),
+                    NewPlayers = lists:filter(fun({U, _}) -> U =/= Username end, Players),
+                    broadcast(NewPlayers, {user_left, Username}),
+                    NewState = State#state{players = NewPlayers},
+                    update_db(NewState),
+                    {reply, {ok, NewBalance}, NewState}
+            end
+    end;
+
+handle_call({leave, Username}, _From, State = #state{status = playing, players = Players}) ->
+    case lists:keyfind(Username, 1, Players) of
+        false ->
+            %% Non presente
+            io:format("[WARNING] Player not in game tried to leave: ~p~n",[Username]),
+            {reply, {error, player_not_in_game}, State};
+        {_Username, _Pid} ->
+            %% TODO rimuovere cartelle utente
             %% Rimuovi il giocatore dalla lista (sia creatore dopo l'inizio del gioco sia giocatore normale)
-            io:format("[LEAVE] Player left the game: ~p~n",[Username]),
+            io:format("[LEAVE] Player left started game: ~p~n",[Username]),
             NewPlayers = lists:filter(fun({U, _}) -> U =/= Username end, Players),
+            %% TODO controllare NewPlayers lista vuota => cancellare game (game_server ritorna stop)
             broadcast(NewPlayers, {user_left, Username}),
 
             NewState = State#state{players = NewPlayers},
             update_db(NewState),
 
-            {reply, ok, NewState}
+            {reply, {ok, balance_unchanged}, NewState}
     end;
 
 handle_call({buy_card, Username}, _From, State = #state{game_id = GameId, pot = Pot, status = waiting}) ->
@@ -225,12 +264,12 @@ handle_call({is_player_in_game, Username}, _From, State = #state{players = Playe
         {_Username, _Pid} -> {reply, true, State}
     end;
 
-handle_call({reconnect, Username, NewWsPid}, _From, State = #state{players = Players, game_id = GameId, drawn = Drawn, won_combinations = Won}) ->
+handle_call({reconnect, Username, NewWsPid}, _From, State = #state{status = playing, players = Players, game_id = GameId, drawn = Drawn, won_combinations = Won}) ->
     case lists:keyfind(Username, 1, Players) of
         false ->
             %% Il player non è nella partita → errore
-            io:format("[RECONNECT] Non-Player tried to reconnect: ~p~n",[Username]),
-            {reply, {error, not_in_game}, State};
+            io:format("[WARNING] Player not in the game tried to reconnect: ~p~n",[Username]),
+            {reply, {error, player_not_in_game}, State};
 
         {_Username, _OldWsPid} ->
             erlang:monitor(process, NewWsPid),
@@ -255,6 +294,10 @@ handle_call({reconnect, Username, NewWsPid}, _From, State = #state{players = Pla
             %% Ritorniamo tutto al chiamante (ws_handler) al posto del semplice 'ok'
             {reply, {ok, UserCards, Drawn, Won}, NewState}
     end;
+
+handle_call({reconnect, Username, _NewWsPid}, _From, State = #state{status = waiting}) ->
+    io:format("[WARNING] Player tried to reconnect to a game in waiting room: ~p~n",[Username]),
+    {reply, {error, game_not_started}, State};
 
 handle_call(_Request, _From, State) ->
     {reply, {error, unknown_request}, State}.
