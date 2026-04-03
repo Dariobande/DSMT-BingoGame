@@ -24,6 +24,17 @@ h2, h3 {
     color: var(--primary-color);
 }
 
+#last-number {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 2ch;
+    font-size: 1.35em;
+    font-weight: 700;
+    color: #d94b4b;
+    line-height: 1;
+}
+
 /* Auth and Lobby Sections */
 #auth-section, #game-section, #register-section {
     background: white;
@@ -97,8 +108,8 @@ button:hover {
 
 .bingo-card {
     display: grid;
-    /* Per la Tombola classica (15 numeri), usiamo una griglia 5x3 */
-    grid-template-columns: repeat(5, 1fr);
+    /* Griglia tombola 3x9 con celle vuote */
+    grid-template-columns: repeat(9, 1fr);
     gap: 5px;
     background-color: var(--primary-color);
     padding: 10px;

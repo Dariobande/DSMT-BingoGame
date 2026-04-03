@@ -147,8 +147,9 @@ handle_call({buy_card, Username}, _From, State = #state{game_id = GameId, pot = 
                 NewBalance = User#user.balance - ?CARD_COST,
                 mnesia:write(User#user{balance = NewBalance}),
                 
-                %% Generate a random 15-number tombola card (mocked logic for brevity)
-                Numbers = lists:sublist(shuffle(lists:seq(1, 90)), 15),
+                %% Generate a tombola-style card: 3 rows x 5 numbers,
+                %% with unique numbers per card and at most one number per decade per row.
+                Numbers = generate_card_grid(),
                 CardId = make_ref(),
                 NewCard = #card{card_id = CardId, user_id = Username, game_id = GameId, grid = Numbers, combinations_won = []},
                 mnesia:write(NewCard),
@@ -184,14 +185,14 @@ handle_call({start_game, Username}, _From, State = #state{creator = Creator, sta
     
     {reply, ok, State#state{status = playing, timer_ref = Ref}};
 
-handle_call({claim_win, Username, Comb, CardId}, _From, State = #state{status = playing, won_combinations = Won, drawn = Drawn}) ->
+handle_call({claim_win, Username, Comb, CardId}, _From, State = #state{status = playing, won_combinations = Won, drawn = Drawn, game_id = GameId}) ->
     %% First-come, first-served logic for concurrent claims
     case lists:member(Comb, Won) of
         true -> 
             {reply, {error, already_claimed}, State};
         false ->
             %% Validate the claim against the database and extracted numbers
-            case validate_win(Username, CardId, Comb, Drawn) of
+            case validate_win(Username, GameId, CardId, Comb, Drawn) of
                 true ->
                     %% Payout logic (distribute the pot % based on combination)
                     Prize = calculate_prize(Comb, State#state.pot),
@@ -224,7 +225,7 @@ handle_call({is_player_in_game, Username}, _From, State = #state{players = Playe
         {_Username, _Pid} -> {reply, true, State}
     end;
 
-handle_call({reconnect, Username, NewWsPid}, _From, State = #state{players = Players}) ->
+handle_call({reconnect, Username, NewWsPid}, _From, State = #state{players = Players, game_id = GameId, drawn = Drawn, won_combinations = Won}) ->
     case lists:keyfind(Username, 1, Players) of
         false ->
             %% Il player non è nella partita → errore
@@ -243,8 +244,16 @@ handle_call({reconnect, Username, NewWsPid}, _From, State = #state{players = Pla
             NewState = State#state{players = NewPlayers},
             update_db(NewState),
 
+            %% 1. Recupero le cartelle da Mnesia tramite pattern matching
+            Pattern = #card{user_id = Username, game_id = GameId, _ = '_'},
+            UserCardsRecords = mnesia:dirty_match_object(card, Pattern),
+            %% Estraiamo solo le griglie (liste di numeri) per mandarle al client
+            UserCards = [Card#card.grid || Card <- UserCardsRecords],
+
             io:format("[RECONNECT] Player correctly reconnected: ~p~n",[Username]),
-            {reply, ok, NewState}
+            
+            %% Ritorniamo tutto al chiamante (ws_handler) al posto del semplice 'ok'
+            {reply, {ok, UserCards, Drawn, Won}, NewState}
     end;
 
 handle_call(_Request, _From, State) ->
@@ -334,11 +343,72 @@ broadcast(Players, Msg) ->
 shuffle(List) ->
     [X || {_, X} <- lists:sort([{rand:uniform(), N} || N <- List])].
 
-validate_win(_Username, _CardId, _Comb, _Drawn) ->
-    %% TODO: Fetch card from Mnesia, intersect Card#card.grid with Drawn numbers,
-    %% and verify if the user truly has the required combination.
-    %% Returning true for now to illustrate the flow.
-    true.
+generate_card_grid() ->
+    generate_card_rows(3, [], []).
+
+generate_card_rows(0, Acc, _UsedNumbers) ->
+    lists:flatten(lists:reverse(Acc));
+generate_card_rows(N, Acc, UsedNumbers) ->
+    {Row, NextUsedNumbers} = generate_card_row(UsedNumbers),
+    generate_card_rows(N - 1, [Row | Acc], NextUsedNumbers).
+
+generate_card_row(UsedNumbers) ->
+    Decades = lists:sublist(shuffle(lists:seq(1, 9)), 5),
+    RowNumbers = [pick_number_from_decade(Decade, UsedNumbers) || Decade <- Decades],
+    {RowNumbers, RowNumbers ++ UsedNumbers}.
+
+pick_number_from_decade(Decade, UsedNumbers) ->
+    AvailableNumbers = [Number || Number <- decade_numbers(Decade), not lists:member(Number, UsedNumbers)],
+    lists:nth(rand:uniform(length(AvailableNumbers)), AvailableNumbers).
+
+decade_numbers(9) -> lists:seq(80, 90);
+decade_numbers(1) -> lists:seq(1, 9);
+decade_numbers(Decade) ->
+    Start = (Decade - 1) * 10,
+    lists:seq(Start, Start + 9).
+
+validate_win(Username, GameId, _CardId, Comb, Drawn) ->
+    Pattern = #card{user_id = Username, game_id = GameId, _ = '_'},
+    UserCards = mnesia:dirty_match_object(card, Pattern),
+    case UserCards of
+        [] ->
+            false;
+        _ ->
+            DrawnSet = sets:from_list(Drawn),
+            lists:any(
+                fun(Card) ->
+                    card_has_combination(Card#card.grid, Comb, DrawnSet)
+                end,
+                UserCards
+            )
+    end.
+
+card_has_combination(Grid, tombola, DrawnSet) ->
+    count_marked(Grid, DrawnSet) =:= 15;
+card_has_combination(Grid, ambo, DrawnSet) ->
+    has_row_with_hits(Grid, DrawnSet, 2);
+card_has_combination(Grid, terno, DrawnSet) ->
+    has_row_with_hits(Grid, DrawnSet, 3);
+card_has_combination(Grid, quaterna, DrawnSet) ->
+    has_row_with_hits(Grid, DrawnSet, 4);
+card_has_combination(Grid, cinquina, DrawnSet) ->
+    has_row_with_hits(Grid, DrawnSet, 5);
+card_has_combination(_Grid, _UnknownComb, _DrawnSet) ->
+    false.
+
+has_row_with_hits(Grid, DrawnSet, RequiredHits) ->
+    Rows = [
+        lists:sublist(Grid, 5),
+        lists:sublist(lists:nthtail(5, Grid), 5),
+        lists:sublist(lists:nthtail(10, Grid), 5)
+    ],
+    lists:any(
+        fun(Row) -> count_marked(Row, DrawnSet) >= RequiredHits end,
+        Rows
+    ).
+
+count_marked(Numbers, DrawnSet) ->
+    length([N || N <- Numbers, sets:is_element(N, DrawnSet)]).
 
 calculate_prize(ambo, Pot) -> erlang:trunc(Pot * 0.10);
 calculate_prize(terno, Pot) -> erlang:trunc(Pot * 0.15);

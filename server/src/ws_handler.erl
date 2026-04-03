@@ -15,7 +15,8 @@
 
 init(Req, _State) ->
     %% Legge i cookie dal client durante handshake
-    Cookies = cowboy_req:cookies(Req),
+    CookiesList = cowboy_req:parse_cookies(Req),
+    Cookies = maps:from_list(CookiesList),
     SessionToken = maps:get(<<"session_token">>, Cookies, undefined),
 
     %% Upgrade the HTTP request to a WebSocket connection
@@ -76,31 +77,41 @@ handle_client_action(<<"ping">>, _Data, State) ->
 %% Authenticate the user using the token provided after login
 handle_client_action(<<"authenticate">>, _Data, State = #ws_state{username = Username, game_id = GameId, game_pid = GamePid}) ->
     case GameId of
-        io:format("[WS-INFO] Lobby access permitted: ~p~n", [Username]),
-        undefined -> send_lobby(State, Username);
+        undefined -> 
+            io:format("[WS-INFO] Lobby access permitted: ~p~n", [Username]),
+            send_lobby(State, Username);
         _ -> 
             case GamePid of
                 undefined ->
                     %% Partita non esiste → ritiriamo su
                     {ok, NewGamePid} = game_server:start(GameId, Username),
                     io:format("[WS-INFO] Crashed game server restarted~n"),
-                    %% ritornare le cartelle del cazzo al coglione
-                    %% ritornare numeri estratti al coglione
-                    %% ritornare anche combinazioni vincenti uscite
-                    %% aggiornare WSPID dell'utente riconnesso
                     %% TODO tutto implementato in reconnect
-                    {ok, GameState} = game_server:reconnect(NewGamePid, Username, self()),
+                    {ok, Cards, Drawn, Won} = game_server:reconnect(NewGamePid, Username, self()),
                     io:format("[WS-INFO] Reconnected to game: ~p~n", [Username]),
-                    Reply = jsx:encode(#{<<"event">> => <<"restore_game">>, <<"game_id">> => GameId, <<"game_state">> => GameState}),
+                    %% Inseriscili nel payload JSON per il frontend:
+                    Reply = jsx:encode(#{
+                        <<"event">> => <<"restore_game">>, 
+                        <<"game_id">> => GameId,
+                        <<"cards">> => Cards,
+                        <<"drawn">> => Drawn,
+                        <<"won">> => Won
+                    }),
                     {reply, {text, Reply}, State#ws_state{game_pid=NewGamePid}};
                 Pid ->
                     %% TODO is_player_in_game
                     case game_server:is_player_in_game(Pid, Username) of
                         true ->
                             %% Ricollega il giocatore alla partita
-                            {ok, GameState} = game_server:reconnect(Pid, Username, self()),
+                            {ok, Cards, Drawn, Won} = game_server:reconnect(Pid, Username, self()),
                             io:format("[WS-INFO] Reconnected to game: ~p~n", [Username]),
-                            Reply = jsx:encode(#{<<"event">> => <<"restore_game">>, <<"game_id">> => GameId, <<"game_state">> => GameState}),
+                            Reply = jsx:encode(#{
+                                <<"event">> => <<"restore_game">>, 
+                                <<"game_id">> => GameId,
+                                <<"cards">> => Cards,
+                                <<"drawn">> => Drawn,
+                                <<"won">> => Won
+                            }),
                             {reply, {text, Reply}, State#ws_state{game_pid=Pid}};
                         false ->
                             io:format("[WARNING] User tried to connect to another game: ~p~n", [Username]),
@@ -115,7 +126,7 @@ handle_client_action(<<"authenticate">>, _Data, State = #ws_state{username = Use
 %% Se un client prova a mandare "claim_win" o "buy_card" ma ha ancora username = undefined...
 handle_client_action(_Action, _Data, State = #ws_state{username = undefined}) ->
     %% ...lo blocchiamo restituendo un errore!
-    io:format("[WARNING] Game operation without being in game: ~p~n", [Username]),
+    io:format("[WARNING] Game operation without being logged~n"),
     Reply = jsx:encode(#{<<"event">> => <<"error">>, <<"message">> => <<"Non sei autenticato!">>}),
     {reply, {text, Reply}, State};
 
@@ -209,11 +220,11 @@ handle_client_action(<<"start_game">>, _Data, State = #ws_state{username = User,
 %% Claim a winning combination
 handle_client_action(<<"claim_win">>, Data, State = #ws_state{username = User, game_pid = Pid}) ->
     Combination = binary_to_atom(maps:get(<<"combination">>, Data), utf8),
-    CardId = maps:get(<<"card_id">>, Data),
+    CardId = maps:get(<<"card_id">>, Data, undefined),
     
     case game_server:claim_win(Pid, User, Combination, CardId) of
         {ok, Prize, Balance} ->
-            Reply = jsx:encode(#{<<"event">> => <<"win_accepted">>, <<"prize">> => Prize, <<"balance">> => Balance}),
+            Reply = jsx:encode(#{<<"event">> => <<"win_accepted">>, <<"prize">> => Prize, <<"balance">> => Balance, <<"combination">> => atom_to_binary(Combination, utf8)}),
             {reply, {text, Reply}, State};
         {error, Reason} ->
             Reply = jsx:encode(#{<<"event">> => <<"error">>, <<"reason">> => atom_to_binary(Reason, utf8)}),

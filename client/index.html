@@ -44,7 +44,7 @@
         <div id="lobby-games-list"></div>
 
         <div id="play-area" style="display:none;">
-            <h3>Last Drawn Number: <span id="last-number" style="font-size: 2em; color: red;">-</span></h3>
+            <h3>Last Drawn Number: <span id="last-number"></span></h3>
             <p>Players in this game: <span id="players-count-game">1</span></p>
             <button id="btn-start" onclick="startGame()" style="display:none;">Start Game</button>
             <button id="btn-buy" onclick="buyCard()">Buy Card (10 coins)</button>
@@ -52,11 +52,11 @@
             <div id="cards-container"></div>
             
             <div id="controls">
-                <button onclick="claimWin('ambo')">Ambo</button>
-                <button onclick="claimWin('terno')">Terno</button>
-                <button onclick="claimWin('quaterna')">Quaterna</button>
-                <button onclick="claimWin('cinquina')">Cinquina</button>
-                <button onclick="claimWin('tombola')">Tombola!</button>
+                <button id="btn-ambo" onclick="claimWin('ambo')">Ambo</button>
+                <button id="btn-terno" onclick="claimWin('terno')">Terno</button>
+                <button id="btn-quaterna" onclick="claimWin('quaterna')">Quaterna</button>
+                <button id="btn-cinquina" onclick="claimWin('cinquina')">Cinquina</button>
+                <button id="btn-tombola" onclick="claimWin('tombola')">Tombola!</button>
             </div>
             <p id="game-log"></p>
             <button id="btn-leave" onclick="leaveGame()">Leave Game</button>

@@ -8,7 +8,8 @@ init(Req0, State) ->
     io:format("[CONNECTION] New client connection~n"),
 
     %% Legge i cookie
-    Cookies = cowboy_req:cookies(Req0),
+    CookiesList = cowboy_req:parse_cookies(Req0),
+    Cookies = maps:from_list(CookiesList),
 
     %% Legge l'azione dal router (register | login)
     Action = hd(State),
@@ -29,14 +30,18 @@ init(Req0, State) ->
                 Req1
             );
         {session_token, TokenB64} ->
-            %% Imposta il cookie HttpOnly
-            cowboy_req:set_resp_cookie(<<"session_token">>, TokenB64,
-                #{path => <<"/">>, http_only => true}, 
-                cowboy_req:reply(200,
-                    #{<<"content-type">> => <<"application/json">>},
-                    jsx:encode(Response),
-                    Req1
-                )
+            %% 1. PRIMA impostiamo il cookie sull'oggetto Req1
+            ReqWithCookie = cowboy_req:set_resp_cookie(
+                <<"session_token">>, 
+                TokenB64, 
+                Req1, 
+                #{path => <<"/">>, http_only => true}
+            ),
+            %% 2. DOPO spediamo la risposta usando il nuovo ReqWithCookie
+            cowboy_req:reply(200,
+                #{<<"content-type">> => <<"application/json">>},
+                jsx:encode(Response),
+                ReqWithCookie
             )
     end,
 

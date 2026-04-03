@@ -67,7 +67,7 @@ async function login() {
         document.getElementById('game-section').style.display = 'block';
         document.getElementById('user-display').innerText = currentUser;
         document.getElementById('balance-display').innerText = data.balance;
-        currentGameID = data.game_id;
+        currentGameId = data.game_id;
         
         // Inizializza la connessione WebSocket
         connectWebSocket();
@@ -103,7 +103,11 @@ function connectWebSocket() {
     };
 
     ws.onclose = () => {
-        logMessage("Connection lost. Trying to reconnect...");
+        if(currentGameId)
+            logMessage("Connection lost during a game. Attempting to reconnect...");
+        else
+            showError("Connection lost. Please refresh the page to reconnect or wait for an automatic retry");
+
         clearInterval(pingInterval);
         // Qui andrebbe implementata una logica di retry (utile in caso di crash di un nodo)
         setTimeout(connectWebSocket, 3000); 
@@ -112,6 +116,7 @@ function connectWebSocket() {
 
 function handleServerMessage(msg) {
     console.log("Received message:", msg);
+    let playersCountJoin, playersCountLeave;
     switch (msg.event) {
         case "game_created":
             document.getElementById('players-count-game').innerText = "1";
@@ -139,14 +144,16 @@ function handleServerMessage(msg) {
             clickCells = true;
             break;
         case "number_drawn":
-            document.getElementById('last-number').innerText = msg.number;
+            document.getElementById('last-number').innerText = String(msg.number);
             logMessage(`Number extracted: ${msg.number}`);
             break;
         case "win_accepted":
             document.getElementById('balance-display').innerText = msg.balance;
+            disableCombinationButton(msg.combination);
             break;
         case "winner_announced":
             logMessage(`${msg.user} won ${msg.combination}! Prize: ${msg.prize}`);
+            disableCombinationButton(msg.combination);
             break;
         case "game_over":
             logMessage("TOMBOLA! The game is over.");
@@ -156,7 +163,7 @@ function handleServerMessage(msg) {
             exitGame(msg.open_games)
             break;
         case "user_reconnected":
-            const playersCountJoin = document.getElementById('players-count-game');
+            playersCountJoin = document.getElementById('players-count-game');
             playersCountJoin.innerText = parseInt(playersCountJoin.innerText) + 1;
             logMessage(`${msg.user} reconnected to the game.`);
             break;
@@ -166,7 +173,7 @@ function handleServerMessage(msg) {
             logMessage(`${msg.user} joined the game.`);
             break;
         case "user_disconnected":
-            const playersCountLeave = document.getElementById('players-count-game');
+            playersCountLeave = document.getElementById('players-count-game');
             playersCountLeave.innerText = parseInt(playersCountLeave.innerText) - 1;
             logMessage(`${msg.user} disconnected from the game.`);
             break;
@@ -179,12 +186,20 @@ function handleServerMessage(msg) {
             exitGame(msg.open_games)
             break;
         case "restore_game":
-            // TODO ripristinare cartelle del coglione
             enterGame(msg.game_id);
+            document.getElementById('last-number').innerText = msg.drawn.length > 0 ? String(msg.drawn[0]) : '';
+            // Renderizza le cartelle recuperate dal server e cliccare numeri già estratti
+            msg.cards.forEach(card => renderCard(card, msg.drawn));
+            // Disabilita i bottoni di vincita per le combinazioni già vinte
+            msg.won.forEach(comb => {
+                const btn = document.getElementById(`btn-${comb}`);
+                if(btn) btn.disabled = true;
+            });
             document.getElementById('controls').style.display = 'flex';
             document.getElementById('btn-buy').style.display = 'none';
             document.getElementById('btn-start').style.display = 'none';
             logMessage(`Reconnected to the game.`);
+            msg.drawn.forEach(num => logMessage(`Number extracted: ${num}`));
             break;
         case "error":
             showError(msg.reason);
@@ -211,8 +226,7 @@ function startGame() {
 }
 
 function claimWin(combination) {
-    // Nota: in una vera implementazione, si dovrebbe passare il CardId corretto
-    ws.send(JSON.stringify({ action: "claim_win", combination: combination, card_id: "dummy_card_id" }));
+    ws.send(JSON.stringify({ action: "claim_win", combination: combination }));
 }
 
 function searchOpenGames() {
@@ -223,27 +237,72 @@ function leaveGame() {
     ws.send(JSON.stringify({ action: "leave_game" }));
 }
 
-function renderCard(grid) {
+function renderCard(grid, drawnNumbers = []) {
     const container = document.getElementById('cards-container');
     const cardDiv = document.createElement('div');
     cardDiv.className = 'bingo-card';
-    
-    // Genera una semplice griglia cliccabile
-    grid.forEach(num => {
-        const cell = document.createElement('div');
-        cell.className = 'bingo-cell';
-        cell.innerText = num;
-        cell.onclick = () => {
-            if(!clickCells) return;
-            if(cell.style.backgroundColor == 'lightgreen')
-                cell.style.backgroundColor = '';
-            else
+    const drawnSet = new Set(drawnNumbers.map(Number));
+
+    const rows = buildCardRows(grid);
+
+    rows.forEach(row => {
+        for (let columnIndex = 0; columnIndex < 9; columnIndex++) {
+            const cell = document.createElement('div');
+            cell.className = 'bingo-cell';
+
+            const number = row[columnIndex];
+            if (number == null) {
+                cell.classList.add('bingo-cell-empty');
+                cell.style.cursor = 'default';
+                cell.style.pointerEvents = 'none';
+                cardDiv.appendChild(cell);
+                continue;
+            }
+
+            cell.innerText = number;
+            if (drawnSet.has(Number(number))) {
                 cell.style.backgroundColor = 'lightgreen';
-        };
-        cardDiv.appendChild(cell);
+            }
+            cell.onclick = () => {
+                if(!clickCells) return;
+                if(cell.style.backgroundColor == 'lightgreen')
+                    cell.style.backgroundColor = '';
+                else
+                    cell.style.backgroundColor = 'lightgreen';
+            };
+            cardDiv.appendChild(cell);
+        }
     });
     
     container.appendChild(cardDiv);
+}
+
+function buildCardRows(grid) {
+    const rows = [Array(9).fill(null), Array(9).fill(null), Array(9).fill(null)];
+    const numbersByRow = [grid.slice(0, 5), grid.slice(5, 10), grid.slice(10, 15)];
+
+    numbersByRow.forEach((rowNumbers, rowIndex) => {
+        rowNumbers.forEach(number => {
+            const columnIndex = getDecadeColumn(number);
+            rows[rowIndex][columnIndex] = number;
+        });
+    });
+
+    return rows;
+}
+
+function getDecadeColumn(number) {
+    const value = Number(number);
+
+    if (value >= 80) return 8;
+    if (value >= 70) return 7;
+    if (value >= 60) return 6;
+    if (value >= 50) return 5;
+    if (value >= 40) return 4;
+    if (value >= 30) return 3;
+    if (value >= 20) return 2;
+    if (value >= 10) return 1;
+    return 0;
 }
 
 function logMessage(text) {
@@ -290,9 +349,11 @@ function enterGame(game_id) {
     document.getElementById('play-area').style.display = 'block';
     document.getElementById('lobby-games-list').replaceChildren();
     document.getElementById('cards-container').replaceChildren();
-    document.getElementById('last-number').innerText = '-';
+    document.getElementById('last-number').innerText = '';
     document.getElementById('controls').style.display = 'none';
     document.getElementById('btn-buy').style.display = 'inline-block';
+    document.getElementById('game-log').replaceChildren();
+    enableGameButtons();
     currentGameId = game_id;
 }
 
@@ -302,6 +363,20 @@ function exitGame(open_games) {
     clickCells = false;
     currentGameId = undefined;
     showOpenGames(open_games);
+}
+
+function enableGameButtons() {
+    document.getElementById('btn-ambo').disabled = false;
+    document.getElementById('btn-terno').disabled = false;
+    document.getElementById('btn-quaterna').disabled = false;
+    document.getElementById('btn-cinquina').disabled = false;
+    document.getElementById('btn-tombola').disabled = false;
+}
+
+function disableCombinationButton(combination) {
+    if (!combination) return;
+    const btn = document.getElementById(`btn-${combination}`);
+    if (btn) btn.disabled = true;
 }
 
 function showError(message, duration = 3000) {
