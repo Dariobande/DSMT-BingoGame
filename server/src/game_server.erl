@@ -327,7 +327,28 @@ handle_info(draw_number, State = #state{status = playing, drawn = Drawn}) ->
             {noreply, State#state{drawn = NewDrawn, timer_ref = Ref}}
     end;
 
-handle_info({'DOWN', _Ref, process, DeadPid, _Reason}, State = #state{players = Players}) ->
+handle_info({'DOWN', _Ref, process, DeadPid, _Reason}, State = #state{status = waiting, players = Players}) ->
+    case lists:keyfind(DeadPid, 2, Players) of
+        false ->
+            %% Non era un player → ignora
+            {noreply, State};
+
+        {Username, DeadPid} ->
+            %% TODO gestire rimozione cartelle, rimborso, aggiornamento gameid sessione utente
+            io:format("Player disconnected from the game waiting room: ~p~n", [Username, DeadPid]),
+
+            NewPlayers = lists:filter(fun({U, _}) -> U =/= Username end, Players),
+
+            %% Notifica agli altri
+            broadcast(NewPlayers, {user_left, Username}),
+
+            NewState = State#state{players = NewPlayers},
+            update_db(NewState),
+
+            {noreply, NewState}
+    end;
+
+handle_info({'DOWN', _Ref, process, DeadPid, _Reason}, State = #state{status = playing, players = Players}) ->
     case lists:keyfind(DeadPid, 2, Players) of
         false ->
             %% Non era un player → ignora
