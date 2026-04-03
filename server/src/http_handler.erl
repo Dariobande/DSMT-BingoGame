@@ -101,7 +101,6 @@ handle_auth(login, Body, Cookies) ->
                                         io:format("[LOGIN] Login successful: ~p~n",[Username]),
                                         Response = #{<<"status">> => <<"ok">>,
                                                      <<"balance">> => User#user.balance,
-                                                     <<"token">> => Token,
                                                      <<"game_id">> => GameID},
                                         {Response, undefined};
                                     [] ->
@@ -109,8 +108,7 @@ handle_auth(login, Body, Cookies) ->
                                         NewTokenB64 = gen_new_token(Username),
                                         io:format("[LOGIN] Login successful: ~p~n",[Username]),
                                         Response = #{<<"status">> => <<"ok">>,
-                                                     <<"balance">> => User#user.balance,
-                                                     <<"token">> => NewTokenB64},
+                                                     <<"balance">> => User#user.balance},
                                         {Response, {session_token, NewTokenB64}}
                                 end;
                             _ ->
@@ -118,8 +116,7 @@ handle_auth(login, Body, Cookies) ->
                                 NewTokenB64 = gen_new_token(Username),
                                 io:format("[LOGIN] Login successful: ~p~n",[Username]),
                                 Response = #{<<"status">> => <<"ok">>,
-                                             <<"balance">> => User#user.balance,
-                                             <<"token">> => NewTokenB64},
+                                             <<"balance">> => User#user.balance},
                                 {Response, {session_token, NewTokenB64}}
                         end;
                     false ->

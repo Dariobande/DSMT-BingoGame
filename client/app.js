@@ -1,7 +1,6 @@
 let currentUser = null;
 let ws = null;
 let currentGameId = undefined;
-let token = null;
 let pingInterval = null;
 let clickCells = false;
 
@@ -68,7 +67,6 @@ async function login() {
         document.getElementById('game-section').style.display = 'block';
         document.getElementById('user-display').innerText = currentUser;
         document.getElementById('balance-display').innerText = data.balance;
-        token = data.token;
         currentGameID = data.game_id;
         
         // Inizializza la connessione WebSocket

@@ -80,8 +80,8 @@ handle_info(clean_old_sessions, State) ->
 handle_info({nodeup, Node}, State) ->
     io:format("Nodo online: ~p, ripristino giochi...\n", [Node]),
 
-    %% Recupera tutte le partite in stato 'playing' o 'waiting'
-    F = fun() -> mnesia:match_object(#game{game_id = '_', status = '_', creator = '_', players = '_', drawn_numbers = '_', pot = '_'}) end,
+    %% Recupera tutte le partite in stato 'playing'
+    F = fun() -> mnesia:match_object(#game{game_id = '_', status = 'playing', creator = '_', players = '_', drawn_numbers = '_', pot = '_', won_combinations = '_'}) end,
     Games = mnesia:transaction(F),
     
     lists:foreach(fun(Game) ->
