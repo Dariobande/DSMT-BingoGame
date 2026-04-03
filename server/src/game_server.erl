@@ -119,10 +119,10 @@ handle_call({join, Username, WsPid}, _From, State = #state{status = waiting, pla
         {_Username, _OldPid} ->
             %% Già presente → opzionale: reconnect soft
             io:format("[WARNING] Player already in game: ~p~n",[Username]),
-            {reply, {error, player_already_in_game}, State};
+            {reply, {error, player_already_in_game}, State}
     end;
 
-handle_call({join, Username, WsPid}, _From, State = #state{status = Status}) ->
+handle_call({join, Username, _WsPid}, _From, State) ->
     io:format("[WARNING] Player tried to join game not in waiting room: ~p~n",[Username]),
     {reply, {error, game_already_started}, State};
 
@@ -133,46 +133,74 @@ handle_call({leave, Username}, _From, State = #state{creator = Creator, status =
             io:format("[WARNING] Player not in game tried to leave: ~p~n",[Username]),
             {reply, {error, player_not_in_game}, State};
         {_Username, _Pid} ->
-            %% TODO gestione cartelle da rimborsare e rimuovere
-            NewBalance = check_player_cards(Username, ...),
-            case Username =:= Creator of
-                true -> 
-                    io:format("[LEAVE] Creator left unstarted game, game cancelled~n"),
-                    %% Il creatore lascia e la partita è in waiting → cancelliamo la partita
-                    delete_game(GameId),
-                    %% TODO rimuovere tutti i giocatori ma anche le loro cartelle e rimborsare correttamente
-                    NewPlayers = lists:filter(fun({U, _}) -> U =/= Username end, Players),
-                    broadcast(NewPlayers, game_cancelled),
-                    {stop, normal, {game_cancelled, GameId}, State};
-                _ -> 
-                    %% Rimuovi il giocatore dalla lista (sia creatore dopo l'inizio del gioco sia giocatore normale)
-                    io:format("[LEAVE] Player left the game in waiting room: ~p~n",[Username]),
-                    NewPlayers = lists:filter(fun({U, _}) -> U =/= Username end, Players),
-                    broadcast(NewPlayers, {user_left, Username}),
-                    NewState = State#state{players = NewPlayers},
-                    update_db(NewState),
-                    {reply, {ok, NewBalance}, NewState}
+            NewBalance = remove_player_cards(Username, GameId, waiting),
+            case NewBalance of
+                {error, refund_failed} ->
+                    {reply, {error, leave_failed}, State};
+                _ ->
+                    case Username =:= Creator of
+                        true -> 
+                            io:format("[LEAVE] Creator left unstarted game, game cancelled~n"),
+                            NewPlayers = lists:filter(fun({U, _}) -> U =/= Username end, Players),
+
+                            %% Rimuove/rimborsa le cartelle dei player rimanenti e notifica saldo aggiornato.
+                            lists:foreach(
+                                fun({PlayerUsername, PlayerWsPid}) ->
+                                    PlayerBalance = remove_player_cards(PlayerUsername, GameId, waiting),
+                                    case {is_pid(PlayerWsPid), PlayerBalance} of
+                                        {true, {error, _}} ->
+                                            PlayerWsPid ! {error, leave_failed};
+                                        {true, _} ->
+                                            PlayerWsPid ! {game_cancelled, PlayerBalance};
+                                        _ ->
+                                            ok
+                                    end
+                                end,
+                                NewPlayers
+                            ),
+
+                            %% Il creatore lascia e la partita è in waiting → cancelliamo la partita
+                            delete_game(GameId),
+
+                            {stop, normal, {game_cancelled, NewBalance}, State};
+                        _ -> 
+                            %% Rimuovi il giocatore dalla lista (sia creatore dopo l'inizio del gioco sia giocatore normale)
+                            io:format("[LEAVE] Player left the game in waiting room: ~p~n",[Username]),
+                            NewPlayers = lists:filter(fun({U, _}) -> U =/= Username end, Players),
+                            broadcast(NewPlayers, {user_left, Username}),
+                            NewState = State#state{players = NewPlayers},
+                            update_db(NewState),
+                            {reply, {ok, NewBalance}, NewState}
+                    end
             end
     end;
 
-handle_call({leave, Username}, _From, State = #state{status = playing, players = Players}) ->
+handle_call({leave, Username}, _From, State = #state{status = playing, players = Players, game_id = GameId}) ->
     case lists:keyfind(Username, 1, Players) of
         false ->
             %% Non presente
             io:format("[WARNING] Player not in game tried to leave: ~p~n",[Username]),
             {reply, {error, player_not_in_game}, State};
         {_Username, _Pid} ->
-            %% TODO rimuovere cartelle utente
-            %% Rimuovi il giocatore dalla lista (sia creatore dopo l'inizio del gioco sia giocatore normale)
-            io:format("[LEAVE] Player left started game: ~p~n",[Username]),
-            NewPlayers = lists:filter(fun({U, _}) -> U =/= Username end, Players),
-            %% TODO controllare NewPlayers lista vuota => cancellare game (game_server ritorna stop)
-            broadcast(NewPlayers, {user_left, Username}),
-
-            NewState = State#state{players = NewPlayers},
-            update_db(NewState),
-
-            {reply, {ok, balance_unchanged}, NewState}
+            case remove_player_cards(Username, GameId, playing) of
+                {error, refund_failed} ->
+                    {reply, {error, leave_failed}, State};
+                Balance ->
+                    %% Rimuovi il giocatore dalla lista (sia creatore dopo l'inizio del gioco sia giocatore normale)
+                    io:format("[LEAVE] Player left started game: ~p~n",[Username]),
+                    NewPlayers = lists:filter(fun({U, _}) -> U =/= Username end, Players),
+                    case NewPlayers of
+                        [] ->
+                            io:format("[LEAVE] Last player left, game cancelled~n"),
+                            delete_game(GameId),
+                            {stop, normal, {ok, Balance}, State};
+                        _ ->
+                            broadcast(NewPlayers, {user_left, Username}),
+                            NewState = State#state{players = NewPlayers},
+                            update_db(NewState),
+                            {reply, {ok, Balance}, NewState}
+                    end
+            end
     end;
 
 handle_call({buy_card, Username}, _From, State = #state{game_id = GameId, pot = Pot, status = waiting}) ->
@@ -327,25 +355,55 @@ handle_info(draw_number, State = #state{status = playing, drawn = Drawn}) ->
             {noreply, State#state{drawn = NewDrawn, timer_ref = Ref}}
     end;
 
-handle_info({'DOWN', _Ref, process, DeadPid, _Reason}, State = #state{status = waiting, players = Players}) ->
+handle_info({'DOWN', _Ref, process, DeadPid, _Reason}, State = #state{status = waiting, players = Players, creator = Creator, game_id = GameId}) ->
     case lists:keyfind(DeadPid, 2, Players) of
         false ->
             %% Non era un player → ignora
             {noreply, State};
 
         {Username, DeadPid} ->
-            %% TODO gestire rimozione cartelle, rimborso, aggiornamento gameid sessione utente
-            io:format("Player disconnected from the game waiting room: ~p~n", [Username, DeadPid]),
+            remove_player_cards(Username, GameId, waiting),
+            case Username =:= Creator of
+                true -> 
+                    io:format("[LEAVE] Creator left unstarted game, game cancelled~n"),
+                    NewPlayers = lists:filter(fun({U, _}) -> U =/= Username end, Players),
 
-            NewPlayers = lists:filter(fun({U, _}) -> U =/= Username end, Players),
+                    %% Rimuove/rimborsa le cartelle dei player rimanenti e notifica saldo aggiornato.
+                    lists:foreach(
+                        fun({PlayerUsername, PlayerWsPid}) ->
+                            PlayerBalance = remove_player_cards(PlayerUsername, GameId, waiting),
+                            case {is_pid(PlayerWsPid), PlayerBalance} of
+                                {true, {error, _}} ->
+                                    PlayerWsPid ! {error, leave_failed};
+                                {true, _} ->
+                                    PlayerWsPid ! {game_cancelled, PlayerBalance};
+                                _ ->
+                                    ok
+                            end
+                        end,
+                        NewPlayers
+                    ),
 
-            %% Notifica agli altri
-            broadcast(NewPlayers, {user_left, Username}),
+                    %% Il creatore lascia e la partita è in waiting → cancelliamo la partita
+                    delete_game(GameId),
+                    {stop, normal, noreply, State};
+                _ ->
+                    io:format("Player disconnected from the game waiting room: ~p~n", [Username]),
 
-            NewState = State#state{players = NewPlayers},
-            update_db(NewState),
-
-            {noreply, NewState}
+                    NewPlayers = lists:filter(fun({U, _}) -> U =/= Username end, Players),
+                    case NewPlayers of
+                        [] ->
+                            io:format("[LEAVE] Last player left, game cancelled~n"),
+                            delete_game(GameId),
+                            {stop, normal, noreply, State};
+                        _ ->
+                            %% Notifica agli altri
+                            broadcast(NewPlayers, {user_left, Username}),
+                            NewState = State#state{players = NewPlayers},
+                            update_db(NewState),
+                            {noreply, NewState}
+                    end
+            end
     end;
 
 handle_info({'DOWN', _Ref, process, DeadPid, _Reason}, State = #state{status = playing, players = Players}) ->
@@ -478,7 +536,12 @@ calculate_prize(ambo, Pot) -> erlang:trunc(Pot * 0.10);
 calculate_prize(terno, Pot) -> erlang:trunc(Pot * 0.15);
 calculate_prize(quaterna, Pot) -> erlang:trunc(Pot * 0.20);
 calculate_prize(cinquina, Pot) -> erlang:trunc(Pot * 0.25);
-calculate_prize(tombola, Pot) -> erlang:trunc(Pot * 0.30).
+calculate_prize(tombola, Pot) ->
+    Pot
+    - calculate_prize(ambo, Pot)
+    - calculate_prize(terno, Pot)
+    - calculate_prize(quaterna, Pot)
+    - calculate_prize(cinquina, Pot).
 
 payout(Username, Amount) ->
     F = fun() ->
@@ -490,6 +553,37 @@ payout(Username, Amount) ->
 
     {atomic, Balance} = mnesia:transaction(F),
     Balance.
+
+%% Funzione per contare quante cartelle ha comprato un giocatore e calcolare il rimborso totale
+%% e rimuovere le cartelle dal database
+remove_player_cards(Username, GameId, Status) ->
+    Pattern = #card{user_id = Username, game_id = GameId, _ = '_'},
+    Cards = mnesia:dirty_match_object(card, Pattern),
+    Refund = length(Cards) * ?CARD_COST,
+    lists:foreach(
+        fun(Card) ->
+            mnesia:dirty_delete_object(Card)
+        end,
+        Cards
+    ),
+    case Status of
+        waiting ->
+            F = fun() ->
+                [User] = mnesia:read(user, Username),
+                NewBalance = User#user.balance + Refund,
+                mnesia:write(User#user{balance = NewBalance}),
+                NewBalance
+            end,
+            case mnesia:transaction(F) of
+                {atomic, UpdatedBalance} ->
+                    UpdatedBalance;
+                {aborted, Reason} ->
+                    io:format("[REFUND] Failed to update balance for ~p: ~p~n", [Username, Reason]),
+                    {error, refund_failed}
+            end;
+        playing ->
+            atom_to_binary(balance_unchanged, utf8)
+    end.    
 
 delete_game(GameId) ->
     %% Operazione Mnesia distribuita

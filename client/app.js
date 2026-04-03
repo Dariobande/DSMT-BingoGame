@@ -158,9 +158,10 @@ function handleServerMessage(msg) {
         case "game_over":
             logMessage("TOMBOLA! The game is over.");
             break;
+        case "game_cancelled":
         case "show_open_games":
         case "leave_game":
-            exitGame(msg.open_games)
+            exitGame(msg.open_games, msg.balance);
             break;
         case "user_reconnected":
             playersCountJoin = document.getElementById('players-count-game');
@@ -181,9 +182,6 @@ function handleServerMessage(msg) {
             playersCountLeave = document.getElementById('players-count-game');
             playersCountLeave.innerText = parseInt(playersCountLeave.innerText) - 1;
             logMessage(`${msg.user} left the game.`);
-            break;
-        case "game_cancelled":
-            exitGame(msg.open_games)
             break;
         case "restore_game":
             enterGame(msg.game_id);
@@ -357,9 +355,11 @@ function enterGame(game_id) {
     currentGameId = game_id;
 }
 
-function exitGame(open_games) {
+function exitGame(open_games, balance) {
     document.getElementById('lobby').style.display = 'flex';
     document.getElementById('play-area').style.display = 'none';
+    if (balance !== "balance_unchanged" && Number.isInteger(balance))
+        document.getElementById('balance-display').innerText = balance;
     clickCells = false;
     currentGameId = undefined;
     showOpenGames(open_games);

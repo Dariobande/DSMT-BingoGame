@@ -44,9 +44,13 @@ websocket_init(State) ->
                 {atomic, {ok, Username, GameId}} ->
                     %% Trova PID della partita se esiste
                     io:format("[CONNECTION] New websocket connection: ~p~n", [Username]),
+                    RealGameId = case mnesia:dirty_read({game, GameId}) of
+                                    [#game{game_id=GameId}] -> GameId;
+                                    [] -> undefined     
+                                 end,
                     {ok, #ws_state{
                         username = Username,
-                        game_id = GameId,
+                        game_id = RealGameId,
                         game_pid = resolve_game_pid(GameId),
                         session_token = Token
                     }};
@@ -79,14 +83,13 @@ handle_client_action(<<"authenticate">>, _Data, State = #ws_state{username = Use
     case GameId of
         undefined -> 
             io:format("[WS-INFO] Lobby access permitted: ~p~n", [Username]),
-            send_lobby(State, Username);
+            send_lobby(State, Username, atom_to_binary(balance_unchanged, utf8));
         _ -> 
             case GamePid of
                 undefined ->
                     %% Partita non esiste → ritiriamo su
                     {ok, NewGamePid} = game_server:start(GameId, Username),
                     io:format("[WS-INFO] Crashed game server restarted~n"),
-                    %% TODO tutto implementato in reconnect
                     {ok, Cards, Drawn, Won} = game_server:reconnect(NewGamePid, Username, self()),
                     io:format("[WS-INFO] Reconnected to game: ~p~n", [Username]),
                     %% Inseriscili nel payload JSON per il frontend:
@@ -115,7 +118,7 @@ handle_client_action(<<"authenticate">>, _Data, State = #ws_state{username = Use
                             io:format("[WARNING] User [~p] failed to reconnect: ~p~n", [Username, Reason]),
                             io:format("[WS-INFO] Lobby access permitted: ~p~n", [Username]),
                             %% Non autorizzato → manda lobby
-                            send_lobby(State, Username)
+                            send_lobby(State, Username, atom_to_binary(balance_unchanged, utf8))
                     end
             end
     end;
@@ -203,11 +206,11 @@ handle_client_action(<<"leave_game">>, _Data, State = #ws_state{username = User,
         {ok, Balance} -> 
             io:format("[WS-INFO] User left the game: ~p~n", [User]),
             update_game_id(State#ws_state.session_token, undefined),
-            AvailableGames = find_open_games(),
-            Reply = jsx:encode(#{<<"event">> => <<"leave_game">>, <<"open_games">> => AvailableGames, <<"balance">> => Balance}),
-            
-            %% Update state of the WS connection: remove game PID
-            {reply, {text, Reply}, State#ws_state{username = User, game_pid = undefined}};
+            send_lobby(State, User, <<"leave_game">>, Balance);
+        {game_cancelled, Balance} ->
+            io:format("[WS-INFO] Creator left the game (game cancelled): ~p~n", [User]),
+            update_game_id(State#ws_state.session_token, undefined),
+            send_lobby(State, User, <<"game_cancelled">>, Balance);
         {error, Reason} ->
             io:format("[WARNING] User denied to buy a card: ~p~n", [User]),
             Reply = jsx:encode(#{<<"event">> => <<"error">>, <<"reason">> => atom_to_binary(Reason, utf8)}),
@@ -298,9 +301,12 @@ resolve_game_pid(GameId) ->
         Pid -> Pid
     end.
 
-send_lobby(State, Username) ->
+send_lobby(State, Username, Balance) ->
+    send_lobby(State, Username, <<"show_open_games">>, Balance).
+
+send_lobby(State, Username, Event, Balance) ->
     AvailableGames = find_open_games(),
-    Reply = jsx:encode(#{<<"event">> => <<"show_open_games">>, <<"open_games">> => AvailableGames}),
+    Reply = jsx:encode(#{<<"event">> => Event, <<"open_games">> => AvailableGames, <<"balance">> => Balance}),
     {reply, {text, Reply}, State#ws_state{username=Username, game_pid=undefined, game_id = undefined}}.
 
 %% Handle incoming Erlang messages from the game_server
@@ -337,10 +343,9 @@ websocket_info({game_event, {user_joined, User}}, State) ->
     Payload = jsx:encode(#{<<"event">> => <<"user_joined">>, <<"user">> => list_to_binary(User)}),
     {reply, {text, Payload}, State};
 
-websocket_info({game_event, game_cancelled}, State) ->
-    AvailableGames = find_open_games(),
-    Payload = jsx:encode(#{<<"event">> => <<"game_cancelled">>, <<"open_games">> => AvailableGames}),
-    {reply, {text, Payload}, State#ws_state{game_pid = undefined}};
+websocket_info({game_event, {game_cancelled, Balance}}, State) ->
+    update_game_id(State#ws_state.session_token, undefined),
+    send_lobby(State, State#ws_state.username, <<"game_cancelled">>, Balance);
 
 websocket_info(_Info, State) ->
     {ok, State}.
