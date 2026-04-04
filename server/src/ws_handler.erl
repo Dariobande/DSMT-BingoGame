@@ -90,17 +90,24 @@ handle_client_action(<<"authenticate">>, _Data, State = #ws_state{username = Use
                     %% Partita non esiste → ritiriamo su
                     {ok, NewGamePid} = game_server:start(GameId, Username),
                     io:format("[WS-INFO] Crashed game server restarted~n"),
-                    {ok, Cards, Drawn, Won} = game_server:reconnect(NewGamePid, Username, self()),
-                    io:format("[WS-INFO] Reconnected to game: ~p~n", [Username]),
-                    %% Inseriscili nel payload JSON per il frontend:
-                    Reply = jsx:encode(#{
-                        <<"event">> => <<"restore_game">>, 
-                        <<"game_id">> => GameId,
-                        <<"cards">> => Cards,
-                        <<"drawn">> => Drawn,
-                        <<"won">> => Won
-                    }),
-                    {reply, {text, Reply}, State#ws_state{game_pid=NewGamePid}};
+                    case game_server:reconnect(NewGamePid, Username, self()) of
+                        {ok, Cards, Drawn, Won} -> 
+                            io:format("[WS-INFO] Reconnected to game: ~p~n", [Username]),
+                            %% Inseriscili nel payload JSON per il frontend:
+                            Reply = jsx:encode(#{
+                                <<"event">> => <<"restore_game">>, 
+                                <<"game_id">> => GameId,
+                                <<"cards">> => Cards,
+                                <<"drawn">> => Drawn,
+                                <<"won">> => Won
+                            }),
+                            {reply, {text, Reply}, State#ws_state{game_pid=NewGamePid}};
+                        {error, Reason} ->
+                            io:format("[WARNING] User [~p] failed to reconnect: ~p~n", [Username, Reason]),
+                            io:format("[WS-INFO] Lobby access permitted: ~p~n", [Username]),
+                            %% Non autorizzato → manda lobby
+                            send_lobby(State, Username, atom_to_binary(balance_unchanged, utf8))
+                    end;
                 Pid ->
                     case game_server:reconnect(Pid, Username, self()) of
                         {ok, Cards, Drawn, Won} ->
@@ -145,13 +152,19 @@ handle_client_action(<<"create_game">>, _Data, State = #ws_state{username = User
     
     %% Start the game_server process locally on this node
     {ok, GamePid} = game_server:start(GameId, Username),
-    game_server:join(GamePid, Username, self()),
-
-    io:format("[WS-INFO] New game created by: ~p~n", [Username]),
+    case game_server:join(GamePid, Username, self()) of
+        {ok, PlayerCount} -> 
+            io:format("[WS-INFO] New game created by: ~p~n", [Username]),
     
-    update_game_id(State#ws_state.session_token, GameId),
-    Reply = jsx:encode(#{<<"event">> => <<"game_created">>, <<"game_id">> => GameId}),
-    {reply, {text, Reply}, State#ws_state{username = Username, game_pid = GamePid}};
+            update_game_id(State#ws_state.session_token, GameId),
+            Reply = jsx:encode(#{<<"event">> => <<"game_created">>, <<"game_id">> => GameId}),
+            {reply, {text, Reply}, State#ws_state{username = Username, game_pid = GamePid}};
+        {error, Reason} ->
+            io:format("[WARNING] User [~p] join failed: ~p~n", [Username, Reason]),
+            Reply = jsx:encode(#{<<"event">> => <<"error">>,  <<"reason">> => atom_to_binary(Reason, utf8)}),
+            {reply, {text, Reply}, State}
+    end;
+    
     
 handle_client_action(<<"create_game">>, _Data, State = #ws_state{username = Username, game_pid = _Pid, game_id = _GameId}) ->
     %% l'utente è già in gioco
@@ -230,11 +243,29 @@ handle_client_action(<<"buy_card">>, _Data, State = #ws_state{username = User, g
             {reply, {text, Reply}, State}
     end;
 
+%% Ready to play
+handle_client_action(<<"ready_to_play">>, _Data, State = #ws_state{username = User, game_pid = Pid}) ->
+    case game_server:ready_to_play(Pid, User) of 
+        ok -> 
+            io:format("[WS-INFO] User ready to play: ~p~n", [User]),
+            {ok, State};
+    {error, Reason} -> 
+            io:format("[WARNING] User [~p] ready to play failed: ~p~n", [Username, Reason]),
+            Reply = jsx:encode(#{<<"event">> => <<"error">>,  <<"reason">> => atom_to_binary(Reason, utf8)}),
+            {reply, {text, Reply}, State}
+    end;
+
 %% Start the game (Creator only)
 handle_client_action(<<"start_game">>, _Data, State = #ws_state{username = User, game_pid = Pid}) ->
     io:format("[WS-INFO] User started the game: ~p~n", [User]),
-    game_server:start_game(Pid, User),
-    {ok, State};
+    case game_server:start_game(Pid, User) of
+        ok ->
+            {ok, State};
+        {error, Reason} -> 
+            io:format("[WARNING] User [~p] start game failed: ~p~n", [Username, Reason]),
+            Reply = jsx:encode(#{<<"event">> => <<"error">>,  <<"reason">> => atom_to_binary(Reason, utf8)}),
+            {reply, {text, Reply}, State}
+    end;
 
 %% Claim a winning combination
 handle_client_action(<<"claim_win">>, Data, State = #ws_state{username = User, game_pid = Pid}) ->
@@ -341,6 +372,14 @@ websocket_info({game_event, {user_disconnected, User}}, State) ->
 
 websocket_info({game_event, {user_joined, User}}, State) ->
     Payload = jsx:encode(#{<<"event">> => <<"user_joined">>, <<"user">> => list_to_binary(User)}),
+    {reply, {text, Payload}, State};
+
+websocket_info({game_event, all_ready}, State) ->
+    Payload = jsx:encode(#{<<"event">> => <<"all_ready">>}),
+    {reply, {text, Payload}, State};
+
+websocket_info({game_event, {user_ready, User}}, State) ->
+    Payload = jsx:encode(#{<<"event">> => <<"user_ready">>, <<"user">> => list_to_binary(User)}),
     {reply, {text, Payload}, State};
 
 websocket_info({game_event, {game_cancelled, Balance}}, State) ->

@@ -121,12 +121,14 @@ function handleServerMessage(msg) {
         case "game_created":
             document.getElementById('players-count-game').innerText = "1";
             document.getElementById('btn-start').style.display = 'inline-block';
+            document.getElementById('btn-ready').style.display = 'none';
             enterGame(msg.game_id);
             logMessage(`Game created.`);
             logMessage(`Waiting for the game to start.`);
             break;
         case "joined":
             document.getElementById('btn-start').style.display = 'none';
+            document.getElementById('btn-ready').style.display = 'inline-block';
             document.getElementById('players-count-game').innerText = msg.player_count;
             enterGame(msg.game_id);
             logMessage(`Joined game successfully.`);
@@ -141,6 +143,7 @@ function handleServerMessage(msg) {
             document.getElementById('controls').style.display = 'flex';
             document.getElementById('btn-buy').style.display = 'none';
             document.getElementById('btn-start').style.display = 'none';
+            document.getElementById('btn-ready').style.display = 'none';
             clickCells = true;
             break;
         case "number_drawn":
@@ -149,16 +152,16 @@ function handleServerMessage(msg) {
             break;
         case "win_accepted":
             document.getElementById('balance-display').innerText = msg.balance;
-            disableCombinationButton(msg.combination);
             break;
         case "winner_announced":
             logMessage(`${msg.user} won ${msg.combination}! Prize: ${msg.prize}`);
-            disableCombinationButton(msg.combination);
+            //disableCombinationButton(msg.combination);
             break;
         case "game_over":
-            logMessage("TOMBOLA! The game is over.");
+            logMessage("BINGO! The game is over.");
             break;
         case "game_cancelled":
+            showError("Game was cancelled: returned to lobby");
         case "show_open_games":
         case "leave_game":
             exitGame(msg.open_games, msg.balance);
@@ -183,21 +186,30 @@ function handleServerMessage(msg) {
             playersCountLeave.innerText = parseInt(playersCountLeave.innerText) - 1;
             logMessage(`${msg.user} left the game.`);
             break;
+        case "all_ready":
+            logMessage(`All players currently in the game are ready.`);
+            break;
+        case "user_ready":
+            logMessage(`${msg.user} is ready to play.`);
+            break;
         case "restore_game":
             enterGame(msg.game_id);
             document.getElementById('last-number').innerText = msg.drawn.length > 0 ? String(msg.drawn[0]) : '';
             // Renderizza le cartelle recuperate dal server e cliccare numeri già estratti
             msg.cards.forEach(card => renderCard(card, msg.drawn));
             // Disabilita i bottoni di vincita per le combinazioni già vinte
-            msg.won.forEach(comb => {
+            /*msg.won.forEach(comb => {
                 const btn = document.getElementById(`btn-${comb}`);
                 if(btn) btn.disabled = true;
-            });
+            });*/
             document.getElementById('controls').style.display = 'flex';
             document.getElementById('btn-buy').style.display = 'none';
             document.getElementById('btn-start').style.display = 'none';
+            document.getElementById('btn-ready').style.display = 'none';
+            clickCells = true;
             logMessage(`Reconnected to the game.`);
             msg.drawn.forEach(num => logMessage(`Number extracted: ${num}`));
+            logMessage(`${msg.won.at(-1)} is the latest winning combination claimed!`);
             break;
         case "error":
             showError(msg.reason);
@@ -233,6 +245,10 @@ function searchOpenGames() {
 
 function leaveGame() {
     ws.send(JSON.stringify({ action: "leave_game" }));
+}
+
+function readyToPlay() {
+    ws.send(JSON.stringify({ action: "ready_to_play" }));
 }
 
 function renderCard(grid, drawnNumbers = []) {
@@ -351,7 +367,7 @@ function enterGame(game_id) {
     document.getElementById('controls').style.display = 'none';
     document.getElementById('btn-buy').style.display = 'inline-block';
     document.getElementById('game-log').replaceChildren();
-    enableGameButtons();
+    //enableGameButtons();
     currentGameId = game_id;
 }
 

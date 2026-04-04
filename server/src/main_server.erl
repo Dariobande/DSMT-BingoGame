@@ -84,6 +84,7 @@ handle_info({nodeup, Node}, State) ->
     F = fun() -> mnesia:match_object(#game{game_id = '_', status = 'playing', creator = '_', players = '_', drawn_numbers = '_', pot = '_', won_combinations = '_'}) end,
     Games = mnesia:transaction(F),
     
+    %% TODO si può levare tutta sta roba, tanto ripartono da soli. Non so come funziona però con Nginx se il nodo cade e poi riparte
     lists:foreach(fun(Game) ->
         GameId = Game#game.game_id,
         Creator = Game#game.creator,
@@ -105,6 +106,8 @@ handle_info({nodedown, Node}, State) ->
     io:format("~n[MONITOR] ATTENZIONE! Nodo andato OFFLINE: ~p~n", [Node]),
     %% In caso di down, Mnesia e i client (tramite Nginx) gestiranno il failover sugli altri nodi.
     %% Potremmo aggiungere qui logiche di allerta o riavvio container via os:cmd se necessario in futuro.
+    %% TODO gestione rimborso cartelle e rimozione cartelle partite in waiting con processo che non esiste +
+    %% TODO poi eliminare questi #game dal DB
     {noreply, State};
 
 handle_info(_Info, State) ->

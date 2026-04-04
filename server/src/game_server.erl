@@ -4,7 +4,7 @@
 -include("../include/bingo_records.hrl").
 
 %% API
--export([start/2, join/3, buy_card/2, start_game/2, claim_win/4, leave/2, is_player_in_game/2, reconnect/3]).
+-export([start/2, join/3, buy_card/2, start_game/2, ready_to_play/2, claim_win/4, leave/2, reconnect/3]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
@@ -47,13 +47,12 @@ buy_card(GamePid, Username) ->
 start_game(GamePid, Username) ->
     gen_server:call(GamePid, {start_game, Username}).
 
+ready_to_play(GamePid, Username) ->
+    gen_server:call(GamePid, {ready_to_play, Username}).
+
 %% A player claims a winning combination (ambo, terno, etc.)
 claim_win(GamePid, Username, Combination, CardId) ->
     gen_server:call(GamePid, {claim_win, Username, Combination, CardId}).
-
-%% Check if a player is in game
-is_player_in_game(GamePid, Username) ->
-    gen_server:call(GamePid, {is_player_in_game, Username}).
 
 %% Reconnect to started game
 reconnect(GamePid, Username, NewWsPid) ->
@@ -109,15 +108,24 @@ handle_call({join, Username, WsPid}, _From, State = #state{status = waiting, pla
             erlang:monitor(process, WsPid),
             broadcast(Players, {user_joined, Username}),
             %% Update state with new player and their WebSocket PID
-            NewPlayers = [{Username, WsPid} | proplists:delete(Username, Players)],
+            Ready = case Username of 
+                        Creator -> ready;
+                        _ -> not_ready
+                    end,
+            %% TODO togliere proplists:delete?
+            NewPlayers = [{Username, WsPid, Ready} | proplists:delete(Username, Players)],
+            case lists:all(fun({_, _, R}) -> R =:= ready end, NewPlayers) of
+                true -> broadcast(Players, all_ready);
+                _ -> ok
+            end,
             PlayerCount = length(NewPlayers),
 
             NewState = State#state{players = NewPlayers},
             update_db(NewState),
 
             {reply, {ok, PlayerCount}, NewState};
-        {_Username, _OldPid} ->
-            %% Già presente → opzionale: reconnect soft
+        {_Username, _OldPid, _Ready} ->
+            %% Già presente
             io:format("[WARNING] Player already in game: ~p~n",[Username]),
             {reply, {error, player_already_in_game}, State}
     end;
@@ -132,7 +140,7 @@ handle_call({leave, Username}, _From, State = #state{creator = Creator, status =
             %% Non presente
             io:format("[WARNING] Player not in game tried to leave: ~p~n",[Username]),
             {reply, {error, player_not_in_game}, State};
-        {_Username, _Pid} ->
+        {_Username, _Pid, _Ready} ->
             NewBalance = remove_player_cards(Username, GameId, waiting),
             case NewBalance of
                 {error, refund_failed} ->
@@ -175,14 +183,14 @@ handle_call({leave, Username}, _From, State = #state{creator = Creator, status =
             end
     end;
 
-handle_call({leave, Username}, _From, State = #state{status = playing, players = Players, game_id = GameId}) ->
+handle_call({leave, Username}, _From, State = #state{status = Status, players = Players, game_id = GameId}) ->
     case lists:keyfind(Username, 1, Players) of
         false ->
             %% Non presente
             io:format("[WARNING] Player not in game tried to leave: ~p~n",[Username]),
             {reply, {error, player_not_in_game}, State};
-        {_Username, _Pid} ->
-            case remove_player_cards(Username, GameId, playing) of
+        {_Username, _Pid, _Ready} ->
+            case remove_player_cards(Username, GameId, Status) of
                 {error, refund_failed} ->
                     {reply, {error, leave_failed}, State};
                 Balance ->
@@ -206,6 +214,7 @@ handle_call({leave, Username}, _From, State = #state{status = playing, players =
 handle_call({buy_card, Username}, _From, State = #state{game_id = GameId, pot = Pot, status = waiting}) ->
     %% Transaction to check balance, deduct cost, and generate a card
     F = fun() ->
+        %%TODO a che serve sta roba inutile
         [User] = mnesia:read(user, Username),
         CardsCount = length(mnesia:match_object(#card{user_id = Username, game_id = GameId, _ = '_'})),
         
@@ -239,18 +248,42 @@ handle_call({buy_card, Username}, _From, State = #state{game_id = GameId, pot = 
             {reply, Error, State}
     end;
 
-handle_call({start_game, Username}, _From, State = #state{creator = Creator, status = waiting}) when Username =:= Creator ->
-    %% Start the drawing loop
-    Ref = erlang:send_after(?DRAW_INTERVAL, self(), draw_number),
-    
-    NewState = State#state{status = playing},
-    update_db(NewState),
-    
-    %% Notify all players
-    broadcast(State#state.players, {game_started, State#state.pot}),
-    io:format("[START] Game started~n"),
-    
-    {reply, ok, State#state{status = playing, timer_ref = Ref}};
+handle_call({start_game, Username}, _From, State = #state{creator = Creator, players = Players, status = waiting}) when Username =:= Creator ->
+    case lists:all(fun({_, _, R}) -> R =:= ready end, Players) of
+        true -> 
+            %% Start the drawing loop
+            Ref = erlang:send_after(?DRAW_INTERVAL, self(), draw_number),
+            
+            NewState = State#state{status = playing},
+            update_db(NewState),
+            
+            %% Notify all players
+            broadcast(State#state.players, {game_started, State#state.pot}),
+            io:format("[START] Game started~n"),
+            
+            {reply, ok, State#state{status = playing, timer_ref = Ref}};
+        _ ->
+            io:format("[WARNING] Not all users are ready: ~p~n",[Username]),
+            {reply, {error, not_all_users_are_ready}, State}
+    end;
+
+handle_call({ready_to_play, Username}, _From, State = #state{creator = Creator, status = waiting, players = Players})  when Username =/= Creator->
+    case lists:keyfind(Username, 1, Players) of
+        false -> 
+            io:format("[WARNING] User declared ready to play without being in game: ~p~n",[Username]),
+            {reply, {error, not_in_game}, State};
+        {_Username, OldWsPid, not_ready} ->
+            %% Notify all players
+            io:format("[READY] User is ready to play: ~p~n",[Username]),
+            broadcast(State#state.players, {user_ready, Username}),
+            NewPlayers = lists:keyreplace(Username, 1, Players, {Username, OldWsPid, ready}),
+            NewState = State#state{players = Newplayers},
+            update_db(NewState),
+            {reply, ok, State};
+        {_Username, _OldWsPid, ready} ->
+            io:format("[WARNING] User declared ready to play when already ready: ~p~n",[Username]),
+            {reply, {error, already_ready}, State}
+    end;
 
 handle_call({claim_win, Username, Comb, CardId}, _From, State = #state{status = playing, won_combinations = Won, drawn = Drawn, game_id = GameId}) ->
     %% First-come, first-served logic for concurrent claims
@@ -275,7 +308,7 @@ handle_call({claim_win, Username, Comb, CardId}, _From, State = #state{status = 
                         NewState = State#state{won_combinations = NewWon, status = finished},
                         update_db(NewState),
                         broadcast(State#state.players, game_over),
-                        {stop, normal, {ok, Prize, NewBalance}, NewState};
+                        {reply, {ok, Prize, NewBalance}, NewState};
                     true ->
                         NewState = State#state{won_combinations = NewWon},
                         update_db(NewState),
@@ -286,11 +319,9 @@ handle_call({claim_win, Username, Comb, CardId}, _From, State = #state{status = 
             end
     end;
 
-handle_call({is_player_in_game, Username}, _From, State = #state{players = Players}) ->
-    case lists:keyfind(Username, 1, Players) of
-        false -> {reply, false, State};
-        {_Username, _Pid} -> {reply, true, State}
-    end;
+handle_call({claim_win, Username, _Comb, _CardId}, _From, State = #state{status = finished}) ->
+    io:format("[WARNING] Player tried to claim a winning combination not after game finished: ~p~n",[Username]),
+    {reply, {error, game_already_finished}, State};
 
 handle_call({reconnect, Username, NewWsPid}, _From, State = #state{status = playing, players = Players, game_id = GameId, drawn = Drawn, won_combinations = Won}) ->
     case lists:keyfind(Username, 1, Players) of
@@ -299,11 +330,11 @@ handle_call({reconnect, Username, NewWsPid}, _From, State = #state{status = play
             io:format("[WARNING] Player not in the game tried to reconnect: ~p~n",[Username]),
             {reply, {error, player_not_in_game}, State};
 
-        {_Username, _OldWsPid} ->
+        {_Username, _OldWsPid, Ready} ->
             erlang:monitor(process, NewWsPid),
 
             %% Sostituisci il vecchio WS PID con quello nuovo
-            NewPlayers = lists:keyreplace(Username, 1, Players, {Username, NewWsPid}),
+            NewPlayers = lists:keyreplace(Username, 1, Players, {Username, NewWsPid, Ready}),
 
             %% notifica riconnessione agli altri
             broadcast(NewPlayers, {user_reconnected, Username}),
@@ -361,7 +392,7 @@ handle_info({'DOWN', _Ref, process, DeadPid, _Reason}, State = #state{status = w
             %% Non era un player → ignora
             {noreply, State};
 
-        {Username, DeadPid} ->
+        {Username, DeadPid, _Ready} ->
             remove_player_cards(Username, GameId, waiting),
             case Username =:= Creator of
                 true -> 
@@ -412,10 +443,10 @@ handle_info({'DOWN', _Ref, process, DeadPid, _Reason}, State = #state{status = p
             %% Non era un player → ignora
             {noreply, State};
 
-        {Username, DeadPid} ->
+        {Username, DeadPid, Ready} ->
             io:format("Player ~p disconnesso (~p)~n", [Username, DeadPid]),
 
-            NewPlayers = lists:keyreplace(Username, 1, Players, {Username, disconnected}),
+            NewPlayers = lists:keyreplace(Username, 1, Players, {Username, disconnected, Ready}),
 
             %% Notifica agli altri
             broadcast(NewPlayers, {user_disconnected, Username}),
@@ -581,7 +612,7 @@ remove_player_cards(Username, GameId, Status) ->
                     io:format("[REFUND] Failed to update balance for ~p: ~p~n", [Username, Reason]),
                     {error, refund_failed}
             end;
-        playing ->
+        _ ->
             atom_to_binary(balance_unchanged, utf8)
     end.    
 
