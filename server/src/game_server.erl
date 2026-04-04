@@ -89,6 +89,8 @@ init([GameId, Creator]) ->
                 won_combinations = ExistingRecord#game.won_combinations
             },
 
+            broadcast(ExistingRecord#game.players, {game_recovered, self()}),
+
             %% Se la partita era 'playing' quando è crashata, facciamo ripartire il timer!
             FinalState = case RecoveredState#state.status of
                 playing ->
@@ -101,7 +103,7 @@ init([GameId, Creator]) ->
             {ok, FinalState}
     end.
 
-handle_call({join, Username, WsPid}, _From, State = #state{status = waiting, players = Players}) ->
+handle_call({join, Username, WsPid}, _From, State = #state{status = waiting, players = Players, creator = Creator}) ->
     case lists:keyfind(Username, 1, Players) of
         false ->
             io:format("[JOIN] New player joined the game: ~p~n",[Username]),
@@ -114,10 +116,6 @@ handle_call({join, Username, WsPid}, _From, State = #state{status = waiting, pla
                     end,
             %% TODO togliere proplists:delete?
             NewPlayers = [{Username, WsPid, Ready} | proplists:delete(Username, Players)],
-            case lists:all(fun({_, _, R}) -> R =:= ready end, NewPlayers) of
-                true -> broadcast(Players, all_ready);
-                _ -> ok
-            end,
             PlayerCount = length(NewPlayers),
 
             NewState = State#state{players = NewPlayers},
@@ -149,11 +147,11 @@ handle_call({leave, Username}, _From, State = #state{creator = Creator, status =
                     case Username =:= Creator of
                         true -> 
                             io:format("[LEAVE] Creator left unstarted game, game cancelled~n"),
-                            NewPlayers = lists:filter(fun({U, _}) -> U =/= Username end, Players),
+                            NewPlayers = lists:filter(fun({U, _, _}) -> U =/= Username end, Players),
 
                             %% Rimuove/rimborsa le cartelle dei player rimanenti e notifica saldo aggiornato.
                             lists:foreach(
-                                fun({PlayerUsername, PlayerWsPid}) ->
+                                fun({PlayerUsername, PlayerWsPid, _PlayerReady}) ->
                                     PlayerBalance = remove_player_cards(PlayerUsername, GameId, waiting),
                                     case {is_pid(PlayerWsPid), PlayerBalance} of
                                         {true, {error, _}} ->
@@ -174,7 +172,7 @@ handle_call({leave, Username}, _From, State = #state{creator = Creator, status =
                         _ -> 
                             %% Rimuovi il giocatore dalla lista (sia creatore dopo l'inizio del gioco sia giocatore normale)
                             io:format("[LEAVE] Player left the game in waiting room: ~p~n",[Username]),
-                            NewPlayers = lists:filter(fun({U, _}) -> U =/= Username end, Players),
+                            NewPlayers = lists:filter(fun({U, _, _}) -> U =/= Username end, Players),
                             broadcast(NewPlayers, {user_left, Username}),
                             NewState = State#state{players = NewPlayers},
                             update_db(NewState),
@@ -196,7 +194,7 @@ handle_call({leave, Username}, _From, State = #state{status = Status, players = 
                 Balance ->
                     %% Rimuovi il giocatore dalla lista (sia creatore dopo l'inizio del gioco sia giocatore normale)
                     io:format("[LEAVE] Player left started game: ~p~n",[Username]),
-                    NewPlayers = lists:filter(fun({U, _}) -> U =/= Username end, Players),
+                    NewPlayers = lists:filter(fun({U, _, _}) -> U =/= Username end, Players),
                     case NewPlayers of
                         [] ->
                             io:format("[LEAVE] Last player left, game cancelled~n"),
@@ -277,9 +275,13 @@ handle_call({ready_to_play, Username}, _From, State = #state{creator = Creator, 
             io:format("[READY] User is ready to play: ~p~n",[Username]),
             broadcast(State#state.players, {user_ready, Username}),
             NewPlayers = lists:keyreplace(Username, 1, Players, {Username, OldWsPid, ready}),
-            NewState = State#state{players = Newplayers},
+            NewState = State#state{players = NewPlayers},
             update_db(NewState),
-            {reply, ok, State};
+            case lists:all(fun({_, _, R}) -> R =:= ready end, NewPlayers) of
+                true -> broadcast(NewPlayers, all_ready);
+                _ -> ok
+            end,
+            {reply, ok, NewState};
         {_Username, _OldWsPid, ready} ->
             io:format("[WARNING] User declared ready to play when already ready: ~p~n",[Username]),
             {reply, {error, already_ready}, State}
@@ -320,7 +322,7 @@ handle_call({claim_win, Username, Comb, CardId}, _From, State = #state{status = 
     end;
 
 handle_call({claim_win, Username, _Comb, _CardId}, _From, State = #state{status = finished}) ->
-    io:format("[WARNING] Player tried to claim a winning combination not after game finished: ~p~n",[Username]),
+    io:format("[WARNING] Player tried to claim a winning combination after game finished: ~p~n",[Username]),
     {reply, {error, game_already_finished}, State};
 
 handle_call({reconnect, Username, NewWsPid}, _From, State = #state{status = playing, players = Players, game_id = GameId, drawn = Drawn, won_combinations = Won}) ->
@@ -335,6 +337,7 @@ handle_call({reconnect, Username, NewWsPid}, _From, State = #state{status = play
 
             %% Sostituisci il vecchio WS PID con quello nuovo
             NewPlayers = lists:keyreplace(Username, 1, Players, {Username, NewWsPid, Ready}),
+            PlayerCount = length(NewPlayers),
 
             %% notifica riconnessione agli altri
             broadcast(NewPlayers, {user_reconnected, Username}),
@@ -351,7 +354,7 @@ handle_call({reconnect, Username, NewWsPid}, _From, State = #state{status = play
             io:format("[RECONNECT] Player correctly reconnected: ~p~n",[Username]),
             
             %% Ritorniamo tutto al chiamante (ws_handler) al posto del semplice 'ok'
-            {reply, {ok, UserCards, Drawn, Won}, NewState}
+            {reply, {ok, UserCards, Drawn, Won, PlayerCount}, NewState}
     end;
 
 handle_call({reconnect, Username, _NewWsPid}, _From, State = #state{status = waiting}) ->
@@ -397,11 +400,11 @@ handle_info({'DOWN', _Ref, process, DeadPid, _Reason}, State = #state{status = w
             case Username =:= Creator of
                 true -> 
                     io:format("[LEAVE] Creator left unstarted game, game cancelled~n"),
-                    NewPlayers = lists:filter(fun({U, _}) -> U =/= Username end, Players),
+                    NewPlayers = lists:filter(fun({U, _, _}) -> U =/= Username end, Players),
 
                     %% Rimuove/rimborsa le cartelle dei player rimanenti e notifica saldo aggiornato.
                     lists:foreach(
-                        fun({PlayerUsername, PlayerWsPid}) ->
+                        fun({PlayerUsername, PlayerWsPid, _PlayerReady}) ->
                             PlayerBalance = remove_player_cards(PlayerUsername, GameId, waiting),
                             case {is_pid(PlayerWsPid), PlayerBalance} of
                                 {true, {error, _}} ->
@@ -421,7 +424,7 @@ handle_info({'DOWN', _Ref, process, DeadPid, _Reason}, State = #state{status = w
                 _ ->
                     io:format("Player disconnected from the game waiting room: ~p~n", [Username]),
 
-                    NewPlayers = lists:filter(fun({U, _}) -> U =/= Username end, Players),
+                    NewPlayers = lists:filter(fun({U, _, _}) -> U =/= Username end, Players),
                     case NewPlayers of
                         [] ->
                             io:format("[LEAVE] Last player left, game cancelled~n"),
@@ -491,7 +494,8 @@ code_change(_OldVsn, State, _Extra) ->
 
 broadcast(Players, Msg) ->
     %% Sends the Erlang message to the Cowboy WebSocket PIDs
-    [WsPid ! {game_event, Msg} || {_User, WsPid} <- Players, is_pid(WsPid)].
+    [WsPid ! {game_event, Msg} || {_User, WsPid, _Ready} <- Players, is_pid(WsPid)].
+
 
 shuffle(List) ->
     [X || {_, X} <- lists:sort([{rand:uniform(), N} || N <- List])].

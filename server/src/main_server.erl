@@ -80,26 +80,32 @@ handle_info(clean_old_sessions, State) ->
 handle_info({nodeup, Node}, State) ->
     io:format("Nodo online: ~p, ripristino giochi...\n", [Node]),
 
+    %% Riallinea il nodo rientrato al cluster Mnesia (incluse ram_copies).
+    ensure_node_db_consistency(Node),
+
     %% Recupera tutte le partite in stato 'playing'
     F = fun() -> mnesia:match_object(#game{game_id = '_', status = 'playing', creator = '_', players = '_', drawn_numbers = '_', pot = '_', won_combinations = '_'}) end,
-    Games = mnesia:transaction(F),
+    case mnesia:transaction(F) of
+        {atomic, Games} ->
+            %% TODO si può levare tutta sta roba, tanto ripartono da soli. Non so come funziona però con Nginx se il nodo cade e poi riparte
+            lists:foreach(fun(Game) ->
+                GameId = Game#game.game_id,
+                Creator = Game#game.creator,
+                case global:whereis_name(GameId) of
+                    undefined ->
+                        %% Processo perso → lo ricreo
+                        {ok, _Pid} = game_server:start(GameId, Creator);
+                        %% TODO restore state
+                        %% gen_server:call(Pid, {restore_state, Game});
+                    _Pid ->
+                        %% Esiste già → skip
+                        ok
+                end
+            end, Games);
+        {aborted, Reason} ->
+            io:format("[MONITOR] Errore nel recupero giochi su nodeup (~p): ~p~n", [Node, Reason])
+    end,
     
-    %% TODO si può levare tutta sta roba, tanto ripartono da soli. Non so come funziona però con Nginx se il nodo cade e poi riparte
-    lists:foreach(fun(Game) ->
-        GameId = Game#game.game_id,
-        Creator = Game#game.creator,
-        case global:whereis_name(GameId) of
-            undefined ->
-                %% Processo perso → lo ricreo
-                {ok, _Pid} = game_server:start(GameId, Creator);
-                %% TODO restore state
-                %% gen_server:call(Pid, {restore_state, Game});
-            _Pid ->
-                %% Esiste già → skip
-                ok
-        end
-    end, Games),
-
     {noreply, State};
 
 handle_info({nodedown, Node}, State) ->
@@ -126,3 +132,42 @@ terminate(Reason, _State = #state{cowboy_nodes = Nodes}) ->
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
+
+%% --- Internal functions ---
+
+ensure_node_db_consistency(Node) ->
+    Tables = [user, session, game, card],
+
+    %% Avvia Mnesia sul nodo rientrato e collegalo al cluster DB.
+    case rpc:call(Node, mnesia, start, []) of
+        ok -> ok;
+        {error, {already_started, mnesia}} -> ok;
+        Other -> io:format("[MONITOR] Start Mnesia su ~p: ~p~n", [Node, Other])
+    end,
+    mnesia:change_config(extra_db_nodes, [Node]),
+    rpc:call(Node, mnesia, change_config, [extra_db_nodes, [node()]]),
+
+    %% Re-attacha le copie tabella con il tipo previsto (disc/ram).
+    ensure_table_copy(user, Node, disc_copies),
+    ensure_table_copy(game, Node, disc_copies),
+    ensure_table_copy(session, Node, ram_copies),
+    ensure_table_copy(card, Node, ram_copies),
+
+    %% Aspetta che le tabelle siano disponibili anche sul nodo rientrato.
+    case rpc:call(Node, mnesia, wait_for_tables, [Tables, 15000]) of
+        ok -> ok;
+        {timeout, Missing} ->
+            io:format("[MONITOR] Timeout wait_for_tables su ~p: ~p~n", [Node, Missing]);
+        Error ->
+            io:format("[MONITOR] wait_for_tables errore su ~p: ~p~n", [Node, Error])
+    end.
+
+ensure_table_copy(Table, Node, Type) ->
+    case mnesia:add_table_copy(Table, Node, Type) of
+        {atomic, ok} ->
+            io:format("[MONITOR] Aggiunta copia ~p (~p) su ~p~n", [Table, Type, Node]);
+        {aborted, {already_exists, Table, Node}} ->
+            ok;
+        {aborted, Reason} ->
+            io:format("[MONITOR] add_table_copy fallita ~p su ~p: ~p~n", [Table, Node, Reason])
+    end.

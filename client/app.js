@@ -194,6 +194,7 @@ function handleServerMessage(msg) {
             break;
         case "restore_game":
             enterGame(msg.game_id);
+            document.getElementById('players-count-game').innerText = parseInt(msg.player_count) - 1;
             document.getElementById('last-number').innerText = msg.drawn.length > 0 ? String(msg.drawn[0]) : '';
             // Renderizza le cartelle recuperate dal server e cliccare numeri già estratti
             msg.cards.forEach(card => renderCard(card, msg.drawn));
@@ -209,7 +210,8 @@ function handleServerMessage(msg) {
             clickCells = true;
             logMessage(`Reconnected to the game.`);
             msg.drawn.forEach(num => logMessage(`Number extracted: ${num}`));
-            logMessage(`${msg.won.at(-1)} is the latest winning combination claimed!`);
+            if (msg.won.length > 0)
+                logMessage(`${msg.won[0]} is the latest winning combination claimed!`);
             break;
         case "error":
             showError(msg.reason);

@@ -18,5 +18,12 @@ start(Port) ->
         [{port, Port}],
         #{env => #{dispatch => Dispatch}}
     ),
+
+    case net_adm:ping('main_node@localhost') of
+        pong ->
+            io:format("~n[INFO] Collegato al main node.~n", []);
+        pang ->
+            io:format("~n[WARNING] Impossibile collegarsi al main node all'avvio.~n", [])
+    end,
     
     io:format("~n[INFO] Server avviato sulla porta ~p!~n", [Port]).

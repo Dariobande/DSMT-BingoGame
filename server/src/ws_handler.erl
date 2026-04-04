@@ -91,7 +91,7 @@ handle_client_action(<<"authenticate">>, _Data, State = #ws_state{username = Use
                     {ok, NewGamePid} = game_server:start(GameId, Username),
                     io:format("[WS-INFO] Crashed game server restarted~n"),
                     case game_server:reconnect(NewGamePid, Username, self()) of
-                        {ok, Cards, Drawn, Won} -> 
+                        {ok, Cards, Drawn, Won, PlayerCount} -> 
                             io:format("[WS-INFO] Reconnected to game: ~p~n", [Username]),
                             %% Inseriscili nel payload JSON per il frontend:
                             Reply = jsx:encode(#{
@@ -99,7 +99,8 @@ handle_client_action(<<"authenticate">>, _Data, State = #ws_state{username = Use
                                 <<"game_id">> => GameId,
                                 <<"cards">> => Cards,
                                 <<"drawn">> => Drawn,
-                                <<"won">> => Won
+                                <<"won">> => Won,
+                                <<"player_count">> => PlayerCount
                             }),
                             {reply, {text, Reply}, State#ws_state{game_pid=NewGamePid}};
                         {error, Reason} ->
@@ -110,7 +111,7 @@ handle_client_action(<<"authenticate">>, _Data, State = #ws_state{username = Use
                     end;
                 Pid ->
                     case game_server:reconnect(Pid, Username, self()) of
-                        {ok, Cards, Drawn, Won} ->
+                        {ok, Cards, Drawn, Won, PlayerCount} ->
                             %% Ricollega il giocatore alla partita
                             io:format("[WS-INFO] Reconnected to game: ~p~n", [Username]),
                             Reply = jsx:encode(#{
@@ -118,7 +119,8 @@ handle_client_action(<<"authenticate">>, _Data, State = #ws_state{username = Use
                                 <<"game_id">> => GameId,
                                 <<"cards">> => Cards,
                                 <<"drawn">> => Drawn,
-                                <<"won">> => Won
+                                <<"won">> => Won,
+                                <<"player_count">> => PlayerCount
                             }),
                             {reply, {text, Reply}, State#ws_state{game_pid=Pid}};
                         {error, Reason} ->
@@ -153,7 +155,7 @@ handle_client_action(<<"create_game">>, _Data, State = #ws_state{username = User
     %% Start the game_server process locally on this node
     {ok, GamePid} = game_server:start(GameId, Username),
     case game_server:join(GamePid, Username, self()) of
-        {ok, PlayerCount} -> 
+        {ok, _PlayerCount} -> 
             io:format("[WS-INFO] New game created by: ~p~n", [Username]),
     
             update_game_id(State#ws_state.session_token, GameId),
@@ -250,7 +252,7 @@ handle_client_action(<<"ready_to_play">>, _Data, State = #ws_state{username = Us
             io:format("[WS-INFO] User ready to play: ~p~n", [User]),
             {ok, State};
     {error, Reason} -> 
-            io:format("[WARNING] User [~p] ready to play failed: ~p~n", [Username, Reason]),
+            io:format("[WARNING] User [~p] ready to play failed: ~p~n", [User, Reason]),
             Reply = jsx:encode(#{<<"event">> => <<"error">>,  <<"reason">> => atom_to_binary(Reason, utf8)}),
             {reply, {text, Reply}, State}
     end;
@@ -262,7 +264,7 @@ handle_client_action(<<"start_game">>, _Data, State = #ws_state{username = User,
         ok ->
             {ok, State};
         {error, Reason} -> 
-            io:format("[WARNING] User [~p] start game failed: ~p~n", [Username, Reason]),
+            io:format("[WARNING] User [~p] start game failed: ~p~n", [User, Reason]),
             Reply = jsx:encode(#{<<"event">> => <<"error">>,  <<"reason">> => atom_to_binary(Reason, utf8)}),
             {reply, {text, Reply}, State}
     end;
@@ -385,6 +387,10 @@ websocket_info({game_event, {user_ready, User}}, State) ->
 websocket_info({game_event, {game_cancelled, Balance}}, State) ->
     update_game_id(State#ws_state.session_token, undefined),
     send_lobby(State, State#ws_state.username, <<"game_cancelled">>, Balance);
+
+websocket_info({game_event, {game_recovered, GamePid}}, State) ->
+    NewState = State#ws_state{game_pid = GamePid},
+    {ok, NewState};
 
 websocket_info(_Info, State) ->
     {ok, State}.
