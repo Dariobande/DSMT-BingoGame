@@ -43,6 +43,7 @@ websocket_init(State) ->
             case mnesia:transaction(F) of
                 {atomic, {ok, Username, GameId}} ->
                     %% Trova PID della partita se esiste
+                    %% TODO se il game non esiste sul db -> partita cancellata, accesso regolare a lobby
                     io:format("[CONNECTION] New websocket connection: ~p~n", [Username]),
                     RealGameId = case mnesia:dirty_read({game, GameId}) of
                                     [#game{game_id=GameId}] -> GameId;

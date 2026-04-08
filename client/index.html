@@ -14,8 +14,8 @@
         <input type="text" id="username" placeholder="Username">
         <input type="password" id="password" placeholder="Password">
         <div class="button-row">
-            <button onclick="login()">Login</button>
-            <button onclick="goRegister()">Registration Page</button>
+            <button id="btn-login">Login</button>
+            <button id="btn-register">Registration Page</button>
         </div>
         <p id="auth-msg"></p>
     </div>
@@ -26,8 +26,8 @@
         <input type="password" id="reg-password" placeholder="Password">
         <input type="password" id="confirm-password" placeholder="Confirm Password">
         <div class="button-row">
-            <button onclick="register()">Register</button>
-            <button onclick="goLogin()">Login Page</button>
+            <button id="btn-go-register">Register</button>
+            <button id="btn-go-login">Login Page</button>
         </div>
         
         <p id="register-msg"></p>
@@ -37,8 +37,8 @@
         <h2>Welcome, <span id="user-display"></span>! Balance: <span id="balance-display"></span></h2>
         
         <div id="lobby">
-            <button id="btn-create" onclick="createGame()">Create a Game</button>
-            <button id="btn-refresh" onclick="searchOpenGames()">Refresh</button>
+            <button id="btn-create">Create a Game</button>
+            <button id="btn-refresh">Refresh</button>
         </div>
 
         <div id="lobby-games-list"></div>
@@ -46,21 +46,21 @@
         <div id="play-area" style="display:none;">
             <h3>Last Drawn Number: <span id="last-number"></span></h3>
             <p>Players in this game: <span id="players-count-game">1</span></p>
-            <button id="btn-start" onclick="startGame()" style="display:none;">Start Game</button>
-            <button id="btn-buy" onclick="buyCard()">Buy Card (10 coins)</button>
-            <button id="btn-ready" onclick="readyToPlay()">Ready To Play</button>
+            <button id="btn-start" style="display:none;">Start Game</button>
+            <button id="btn-buy">Buy Card (10 coins)</button>
+            <button id="btn-ready">Ready To Play</button>
 
             <div id="cards-container"></div>
             
             <div id="controls">
-                <button id="btn-ambo" onclick="claimWin('ambo')">Ambo</button>
-                <button id="btn-terno" onclick="claimWin('terno')">Terno</button>
-                <button id="btn-quaterna" onclick="claimWin('quaterna')">Quaterna</button>
-                <button id="btn-cinquina" onclick="claimWin('cinquina')">Cinquina</button>
-                <button id="btn-tombola" onclick="claimWin('tombola')">Tombola!</button>
+                <button id="btn-ambo">Ambo</button>
+                <button id="btn-terno">Terno</button>
+                <button id="btn-quaterna">Quaterna</button>
+                <button id="btn-cinquina">Cinquina</button>
+                <button id="btn-tombola">Tombola!</button>
             </div>
             <p id="game-log"></p>
-            <button id="btn-leave" onclick="leaveGame()">Leave Game</button>
+            <button id="btn-leave">Leave Game</button>
         </div>
     </div>
 

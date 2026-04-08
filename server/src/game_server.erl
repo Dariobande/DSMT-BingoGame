@@ -96,6 +96,11 @@ init([GameId, Creator]) ->
                 playing ->
                     Ref = erlang:send_after(?DRAW_INTERVAL, self(), draw_number),
                     RecoveredState#state{timer_ref = Ref};
+                waiting ->
+                    %% TODO gestione rimborsi, cartelle ecc 
+                    %% TODO broadcast game cancelled
+                    %% TODO delete game
+                    ;
                 _ ->
                     RecoveredState
             end,
@@ -212,7 +217,6 @@ handle_call({leave, Username}, _From, State = #state{status = Status, players = 
 handle_call({buy_card, Username}, _From, State = #state{game_id = GameId, pot = Pot, status = waiting}) ->
     %% Transaction to check balance, deduct cost, and generate a card
     F = fun() ->
-        %%TODO a che serve sta roba inutile
         [User] = mnesia:read(user, Username),
         CardsCount = length(mnesia:match_object(#card{user_id = Username, game_id = GameId, _ = '_'})),
         

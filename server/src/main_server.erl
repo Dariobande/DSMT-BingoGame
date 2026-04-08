@@ -114,6 +114,26 @@ handle_info({nodedown, Node}, State) ->
     %% Potremmo aggiungere qui logiche di allerta o riavvio container via os:cmd se necessario in futuro.
     %% TODO gestione rimborso cartelle e rimozione cartelle partite in waiting con processo che non esiste +
     %% TODO poi eliminare questi #game dal DB
+
+    F = fun() -> mnesia:match_object(#game{game_id = '_', status = 'waiting', creator = '_', players = '_', drawn_numbers = '_', pot = '_', won_combinations = '_'}) end,
+    case mnesia:transaction(F) of
+        {atomic, Games} ->
+            lists:foreach(fun(Game) ->
+                GameId = Game#game.game_id,
+                Players = Game#game.players,
+                case global:whereis_name(GameId) of
+                    undefined ->
+                        %% Processo perso → lo gestione rimborsi, cartelle e cancellazione
+                        remove_players_cards(Players, GameId),
+                        delete_game(GameId);
+                    _Pid ->
+                        %% Esiste già → skip
+                        ok
+                end
+            end, Games);
+        {aborted, Reason} ->
+            io:format("[ERROR] Error during waiting room game cleaning after node (~p) down: ~p~n", [Node, Reason])
+    end,
     {noreply, State};
 
 handle_info(_Info, State) ->
@@ -170,4 +190,43 @@ ensure_table_copy(Table, Node, Type) ->
             ok;
         {aborted, Reason} ->
             io:format("[MONITOR] add_table_copy fallita ~p su ~p: ~p~n", [Table, Node, Reason])
+    end.
+
+remove_players_cards(Users, GameId) ->
+    %% TODO for each User in Users, in GameId, remove cards and add cards prize to balance
+    Pattern = #card{user_id = Username, game_id = GameId, _ = '_'},
+    Cards = mnesia:dirty_match_object(card, Pattern),
+    Refund = length(Cards) * ?CARD_COST,
+    lists:foreach(
+        fun(Card) ->
+            mnesia:dirty_delete_object(Card)
+        end,
+        Cards
+    ),
+    F = fun() ->
+        [User] = mnesia:read(user, Username),
+        NewBalance = User#user.balance + Refund,
+        mnesia:write(User#user{balance = NewBalance}),
+        NewBalance
+    end,
+    case mnesia:transaction(F) of
+        {atomic, UpdatedBalance} ->
+            UpdatedBalance;
+        {aborted, Reason} ->
+            io:format("[REFUND] Failed to update balance for ~p: ~p~n", [Username, Reason]),
+            {error, refund_failed}
+    end.
+
+delete_game(GameId) ->
+    %% Operazione Mnesia distribuita
+    F = fun() ->
+        mnesia:delete({game, GameId})
+    end,
+    case mnesia:transaction(F) of
+        {atomic, ok} ->
+            io:format("Partita ~p cancellata con successo da Mnesia~n", [GameId]),
+            ok;
+        {aborted, Reason} ->
+            io:format("Errore cancellando partita ~p: ~p~n", [GameId, Reason]),
+            {error, Reason}
     end.

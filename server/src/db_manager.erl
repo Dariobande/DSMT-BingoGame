@@ -28,7 +28,7 @@ init_cluster_db(Nodes) ->
     
     mnesia:create_table(game, [
         {attributes, record_info(fields, game)},
-        {disc_copies, Nodes}
+        {ram_copies, Nodes}
     ]),
     
     mnesia:create_table(card, [

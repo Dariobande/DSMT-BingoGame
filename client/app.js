@@ -3,6 +3,7 @@ let ws = null;
 let currentGameId = undefined;
 let pingInterval = null;
 let clickCells = false;
+let num_cards = 0;
 
 // --- API HTTP ---
 
@@ -135,6 +136,7 @@ function handleServerMessage(msg) {
             logMessage(`Waiting for the game to start.`);
             break;
         case "card_bought":
+            num_cards++;
             renderCard(msg.grid);
             document.getElementById('balance-display').innerText = msg.balance;
             break;
@@ -196,7 +198,7 @@ function handleServerMessage(msg) {
             enterGame(msg.game_id);
             document.getElementById('players-count-game').innerText = parseInt(msg.player_count) - 1;
             document.getElementById('last-number').innerText = msg.drawn.length > 0 ? String(msg.drawn[0]) : '';
-            // Renderizza le cartelle recuperate dal server e cliccare numeri già estratti
+            num_cards = msg.cards.length();
             msg.cards.forEach(card => renderCard(card, msg.drawn));
             // Disabilita i bottoni di vincita per le combinazioni già vinte
             /*msg.won.forEach(comb => {
@@ -238,6 +240,11 @@ function startGame() {
 }
 
 function claimWin(combination) {
+    // TODO inviare numeri selezionati al server
+    if(!checkPossibleCombination(combination)) {
+        showError("You have not selected enough numbers!");
+        return;
+    }
     ws.send(JSON.stringify({ action: "claim_win", combination: combination }));
 }
 
@@ -260,11 +267,12 @@ function renderCard(grid, drawnNumbers = []) {
     const drawnSet = new Set(drawnNumbers.map(Number));
 
     const rows = buildCardRows(grid);
-
+    let currentRow = 0;
     rows.forEach(row => {
         for (let columnIndex = 0; columnIndex < 9; columnIndex++) {
             const cell = document.createElement('div');
             cell.className = 'bingo-cell';
+            cell.id = 'card'+num_cards+'cell'+currentRow+columnIndex;
 
             const number = row[columnIndex];
             if (number == null) {
@@ -288,9 +296,49 @@ function renderCard(grid, drawnNumbers = []) {
             };
             cardDiv.appendChild(cell);
         }
+        currentRow++;
     });
     
     container.appendChild(cardDiv);
+}
+
+function checkPossibleCombination(comb) {
+    for (let card = 0; card < num_cards; card++) {
+        let clicked_cells = 0;
+        for (let row = 0; row < 3; row++) {
+            if (comb !== 'tombola') {
+                clicked_cells = 0;
+            }
+            let needed_cells = combToNumber(comb);
+            for (let column = 0; column < 9; column++) {
+                if(document.getElementById('card'+card+'cell'+row+column).style.backgroundColor == 'lightgreen') {
+                    clicked_cells++;
+                }
+            }
+            if (comb !== 'tombola' && clicked_cells >= needed_cells) {
+                return true;
+            }
+        }
+        if (comb === 'tombola' && clicked_cells >= '15') {
+            return true;
+        }
+    }
+    return false;
+}
+
+function combToNumber(comb) {
+    switch (comb) {
+        case 'ambo':
+            return 2;
+        case 'terno':
+            return 3;
+        case 'quaterna':
+            return 4;
+        case 'cinquina':
+            return 5;
+        case 'tombola':
+            return 15;
+    }
 }
 
 function buildCardRows(grid) {
@@ -371,6 +419,7 @@ function enterGame(game_id) {
     document.getElementById('game-log').replaceChildren();
     //enableGameButtons();
     currentGameId = game_id;
+    num_cards = 0;
 }
 
 function exitGame(open_games, balance) {
@@ -413,3 +462,31 @@ function showError(message, duration = 3000) {
         errorDiv.style.display = 'none';
     }, duration);
 }
+
+document.addEventListener("DOMContentLoaded", () => {
+    const combinations = ["ambo", "terno", "quaterna", "cinquina", "tombola"];
+
+    combinations.forEach(comb => {
+        document.getElementById(`btn-${comb}`).addEventListener("click", () => claimWin(comb));
+    });
+
+    document.getElementById("btn-start").addEventListener("click", startGame);
+
+    document.getElementById("btn-buy").addEventListener("click", buyCard);
+
+    document.getElementById("btn-ready").addEventListener("click", readyToPlay);
+
+    document.getElementById("btn-create").addEventListener("click", createGame);
+
+    document.getElementById("btn-refresh").addEventListener("click", searchOpenGames);
+
+    document.getElementById("btn-leave").addEventListener("click", leaveGame);
+
+    document.getElementById("btn-register").addEventListener("click", register);
+
+    document.getElementById("btn-login").addEventListener("click", login);
+
+    document.getElementById("btn-go-login").addEventListener("click", goLogin);
+
+    document.getElementById("btn-go-register").addEventListener("click", goRegister);
+});
