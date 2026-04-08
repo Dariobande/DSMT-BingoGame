@@ -153,9 +153,20 @@ handle_client_action(_Action, _Data, State = #ws_state{username = undefined}) ->
 
 handle_client_action(<<"search_open_games">>, _Data, State = #ws_state{username = Username, game_pid = undefined}) ->
     io:format("[WS-INFO] Lobby access permitted: ~p~n", [Username]),
-    AvailableGames = find_open_games(),
-    Reply = jsx:encode(#{ <<"event">> => <<"show_open_games">>, <<"open_games">> => AvailableGames }),
-    {reply, {text, Reply}, State};
+    %% prendi bilancio attuale dal db
+    F = fun() ->
+        case mnesia:read(user, Username) of
+            [User] ->
+                User#user.balance;
+            [] ->
+                balance_unchanged
+        end
+    end,
+    Balance = case mnesia:transaction(F) of
+        {atomic, CurrentBalance} -> CurrentBalance;
+        {aborted, _Reason} -> balance_unchanged
+    end,
+    send_lobby(State, Username, Balance);
 
 %% Create a new game
 handle_client_action(<<"create_game">>, _Data, State = #ws_state{username = Username, game_pid = undefined, game_id = undefined}) ->
@@ -397,6 +408,7 @@ websocket_info({game_event, {user_ready, User}}, State) ->
     {reply, {text, Payload}, State};
 
 websocket_info({game_event, {game_cancelled, Balance}}, State) ->
+    io:format("[WS-INFO] Game cancelled event received for user ~p~n", [State#ws_state.username]),
     update_game_id(State#ws_state.session_token, undefined),
     send_lobby(State, State#ws_state.username, <<"game_cancelled">>, Balance);
 

@@ -3,7 +3,6 @@ let ws = null;
 let currentGameId = undefined;
 let pingInterval = null;
 let clickCells = false;
-let num_cards = 0;
 let claim_win = null;
 let fadeTimeout;
 let hideTimeout;
@@ -139,7 +138,6 @@ function handleServerMessage(msg) {
             logMessage(`Waiting for the game to start.`);
             break;
         case "card_bought":
-            num_cards++;
             renderCard(msg.grid, msg.card_id);
             document.getElementById('balance-display').innerText = msg.balance;
             break;
@@ -201,7 +199,6 @@ function handleServerMessage(msg) {
             enterGame(msg.game_id);
             document.getElementById('players-count-game').innerText = parseInt(msg.player_count) - 1;
             document.getElementById('last-number').innerText = msg.drawn.length > 0 ? String(msg.drawn[0]) : '';
-            num_cards = msg.cards.length();
             msg.cards.forEach(card => renderCard(card.grid, card.card_id, msg.drawn));
             // Disabilita i bottoni di vincita per le combinazioni già vinte
             /*msg.won.forEach(comb => {
@@ -438,7 +435,6 @@ function enterGame(game_id) {
     document.getElementById('game-log').replaceChildren();
     //enableGameButtons();
     currentGameId = game_id;
-    num_cards = 0;
 }
 
 function exitGame(open_games, balance) {
@@ -465,7 +461,7 @@ function disableCombinationButton(combination) {
     if (btn) btn.disabled = true;
 }
 
-function showError(message, duration = 5000) {
+function showError(message, duration = 7000) {
     const errorDiv = document.getElementById('error-message');
 
     // Reset timeout precedenti
@@ -481,7 +477,7 @@ function showError(message, duration = 5000) {
     void errorDiv.offsetWidth;
 
     // Ripristina transizione
-    errorDiv.style.transition = 'opacity 2s ease-out';
+    errorDiv.style.transition = 'opacity 5s ease-out';
 
     // Imposta nuovo messaggio
     errorDiv.innerText = message;

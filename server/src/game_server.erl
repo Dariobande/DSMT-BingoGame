@@ -97,8 +97,9 @@ init([GameId, Creator]) ->
                     Ref = erlang:send_after(?DRAW_INTERVAL, self(), draw_number),
                     RecoveredState#state{timer_ref = Ref};
                 waiting ->
-                    io:format("[RECOVERY] Waiting game ~p found without active process: cancelling and refunding players~n", [GameId]),
-                    cancel_waiting_recovered_game(GameId, RecoveredState#state.players),
+                    io:format("[RECOVERY] Waiting game ~p found without active process: atomically cleaning and refunding~n", [GameId]),
+                    %% Cleanup atomico: previene race condition con main_server nodedown handler
+                    cleanup_waiting_game_atomic(GameId),
                     stop_waiting_recovery;
                 _ ->
                     RecoveredState
@@ -664,24 +665,70 @@ update_db(State) ->
     %% e sovrascrive automaticamente il vecchio record con lo stesso game_id.
     mnesia:dirty_write(game, GameRecord).
 
-cancel_waiting_recovered_game(GameId, Players) ->
-    lists:foreach(
-        fun(Player) ->
-            {Username, PlayerWsPid} = case Player of
-                {U, WsPid, _Ready} -> {U, WsPid};
-                {U, WsPid} -> {U, WsPid};
-                U -> {U, undefined}
-            end,
-            PlayerBalance = remove_player_cards(Username, GameId, waiting),
-            case {is_pid(PlayerWsPid), PlayerBalance} of
-                {true, {error, _}} ->
-                    PlayerWsPid ! {error, leave_failed};
-                {true, _} ->
-                    PlayerWsPid ! {game_event, {game_cancelled, PlayerBalance}};
-                _ ->
-                    ok
-            end
-        end,
-        Players
-    ),
-    delete_game(GameId).
+%%% ATOMIC cleanup function: cancella cartelle, rimborsa e cancella partita in ONE transaction
+%%% Previene race condition quando nodo crasha + client riconnette
+cleanup_waiting_game_atomic(GameId) ->
+    F = fun() ->
+        case mnesia:read(game, GameId) of
+            [] -> 
+                {ok, []}; % Partita non esiste
+            [GameRecord] ->
+                Players = GameRecord#game.players,
+                
+                % Per ogni player: trova carte, cancella, rimborsa e prepara notifica WS post-commit
+                Notifications = lists:foldl(
+                    fun(PlayerTuple, Acc) ->
+                        {Username, PlayerWsPid} = case PlayerTuple of
+                            {U, WsPid, _Ready} -> {U, WsPid};
+                            {U, WsPid} -> {U, WsPid};
+                            U -> {U, undefined}
+                        end,
+
+                        Cards = mnesia:match_object(#card{user_id = Username, game_id = GameId, _ = '_'}),
+                        Refund = length(Cards) * ?CARD_COST,
+
+                        lists:foreach(
+                            fun(Card) ->
+                                mnesia:delete_object(Card)
+                            end,
+                            Cards
+                        ),
+
+                        case mnesia:read(user, Username) of
+                            [User] ->
+                                NewBalance = User#user.balance + Refund,
+                                mnesia:write(User#user{balance = NewBalance}),
+                                io:format("[CLEANUP] Refunded ~p to ~p~n", [Refund, Username]),
+                                case is_pid(PlayerWsPid) of
+                                    true -> [{PlayerWsPid, NewBalance} | Acc];
+                                    false -> Acc
+                                end;
+                            [] ->
+                                io:format("[CLEANUP] User ~p not found for refund~n", [Username]),
+                                Acc
+                        end
+                    end,
+                    [],
+                    Players
+                ),
+                
+                % Cancella la partita
+                mnesia:delete({game, GameId}),
+                {ok, Notifications}
+        end
+    end,
+    
+    case mnesia:transaction(F) of
+        {atomic, {ok, Notifications}} ->
+            lists:foreach(
+                fun({PlayerWsPid, PlayerBalance}) ->
+                    PlayerWsPid ! {game_event, {game_cancelled, PlayerBalance}}
+                end,
+                Notifications
+            ),
+            io:format("[CLEANUP] Partita ~p ripulita atomicamente~n", [GameId]),
+            ok;
+        {aborted, Reason} ->
+            io:format("[CLEANUP] Errore nella cleanup atomica di ~p: ~p~n", [GameId, Reason]),
+            {error, Reason}
+    end.
