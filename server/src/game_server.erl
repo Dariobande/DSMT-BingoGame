@@ -4,7 +4,7 @@
 -include("../include/bingo_records.hrl").
 
 %% API
--export([start/2, join/3, buy_card/2, start_game/2, ready_to_play/2, claim_win/4, leave/2, reconnect/3]).
+-export([start/2, join/3, buy_card/2, start_game/2, ready_to_play/2, claim_win/5, leave/2, reconnect/3]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
@@ -51,8 +51,8 @@ ready_to_play(GamePid, Username) ->
     gen_server:call(GamePid, {ready_to_play, Username}).
 
 %% A player claims a winning combination (ambo, terno, etc.)
-claim_win(GamePid, Username, Combination, CardId) ->
-    gen_server:call(GamePid, {claim_win, Username, Combination, CardId}).
+claim_win(GamePid, Username, Combination, CardId, Numbers) ->
+    gen_server:call(GamePid, {claim_win, Username, Combination, CardId, Numbers}).
 
 %% Reconnect to started game
 reconnect(GamePid, Username, NewWsPid) ->
@@ -97,15 +97,19 @@ init([GameId, Creator]) ->
                     Ref = erlang:send_after(?DRAW_INTERVAL, self(), draw_number),
                     RecoveredState#state{timer_ref = Ref};
                 waiting ->
-                    %% TODO gestione rimborsi, cartelle ecc 
-                    %% TODO broadcast game cancelled
-                    %% TODO delete game
-                    ;
+                    io:format("[RECOVERY] Waiting game ~p found without active process: cancelling and refunding players~n", [GameId]),
+                    cancel_waiting_recovered_game(GameId, RecoveredState#state.players),
+                    stop_waiting_recovery;
                 _ ->
                     RecoveredState
             end,
 
-            {ok, FinalState}
+            case FinalState of
+                stop_waiting_recovery ->
+                    {stop, waiting_game_cancelled};
+                _ ->
+                    {ok, FinalState}
+            end
     end.
 
 handle_call({join, Username, WsPid}, _From, State = #state{status = waiting, players = Players, creator = Creator}) ->
@@ -119,7 +123,6 @@ handle_call({join, Username, WsPid}, _From, State = #state{status = waiting, pla
                         Creator -> ready;
                         _ -> not_ready
                     end,
-            %% TODO togliere proplists:delete?
             NewPlayers = [{Username, WsPid, Ready} | proplists:delete(Username, Players)],
             PlayerCount = length(NewPlayers),
 
@@ -162,7 +165,7 @@ handle_call({leave, Username}, _From, State = #state{creator = Creator, status =
                                         {true, {error, _}} ->
                                             PlayerWsPid ! {error, leave_failed};
                                         {true, _} ->
-                                            PlayerWsPid ! {game_cancelled, PlayerBalance};
+                                            PlayerWsPid ! {game_event, {game_cancelled, PlayerBalance}};
                                         _ ->
                                             ok
                                     end
@@ -228,7 +231,7 @@ handle_call({buy_card, Username}, _From, State = #state{game_id = GameId, pot = 
                 %% Generate a tombola-style card: 3 rows x 5 numbers,
                 %% with unique numbers per card and at most one number per decade per row.
                 Numbers = generate_card_grid(),
-                CardId = make_ref(),
+                CardId = binary:encode_hex(crypto:strong_rand_bytes(8)),
                 NewCard = #card{card_id = CardId, user_id = Username, game_id = GameId, grid = Numbers, combinations_won = []},
                 mnesia:write(NewCard),
                 io:format("[BUY] Player bought a card: ~p~n",[Username]),
@@ -291,14 +294,14 @@ handle_call({ready_to_play, Username}, _From, State = #state{creator = Creator, 
             {reply, {error, already_ready}, State}
     end;
 
-handle_call({claim_win, Username, Comb, CardId}, _From, State = #state{status = playing, won_combinations = Won, drawn = Drawn, game_id = GameId}) ->
+handle_call({claim_win, Username, Comb, CardId, Numbers}, _From, State = #state{status = playing, won_combinations = Won, drawn = Drawn, game_id = GameId}) ->
     %% First-come, first-served logic for concurrent claims
     case lists:member(Comb, Won) of
         true -> 
             {reply, {error, already_claimed}, State};
         false ->
             %% Validate the claim against the database and extracted numbers
-            case validate_win(Username, GameId, CardId, Comb, Drawn) of
+            case validate_win(Username, GameId, CardId, Comb, Drawn, Numbers) of
                 true ->
                     %% Payout logic (distribute the pot % based on combination)
                     Prize = calculate_prize(Comb, State#state.pot),
@@ -325,7 +328,7 @@ handle_call({claim_win, Username, Comb, CardId}, _From, State = #state{status = 
             end
     end;
 
-handle_call({claim_win, Username, _Comb, _CardId}, _From, State = #state{status = finished}) ->
+handle_call({claim_win, Username, _Comb, _CardId, _Numbers}, _From, State = #state{status = finished}) ->
     io:format("[WARNING] Player tried to claim a winning combination after game finished: ~p~n",[Username]),
     {reply, {error, game_already_finished}, State};
 
@@ -352,8 +355,14 @@ handle_call({reconnect, Username, NewWsPid}, _From, State = #state{status = play
             %% 1. Recupero le cartelle da Mnesia tramite pattern matching
             Pattern = #card{user_id = Username, game_id = GameId, _ = '_'},
             UserCardsRecords = mnesia:dirty_match_object(card, Pattern),
-            %% Estraiamo solo le griglie (liste di numeri) per mandarle al client
-            UserCards = [{Card#card.grid, Card#card.card_id} || Card <- UserCardsRecords],
+            %% Ritorna una lista JSON-safe di card per ws_handler/restore_game.
+            UserCards = [
+                #{
+                    <<"grid">> => Card#card.grid,
+                    <<"card_id">> => Card#card.card_id
+                }
+                || Card <- UserCardsRecords
+            ],
 
             io:format("[RECONNECT] Player correctly reconnected: ~p~n",[Username]),
             
@@ -414,7 +423,7 @@ handle_info({'DOWN', _Ref, process, DeadPid, _Reason}, State = #state{status = w
                                 {true, {error, _}} ->
                                     PlayerWsPid ! {error, leave_failed};
                                 {true, _} ->
-                                    PlayerWsPid ! {game_cancelled, PlayerBalance};
+                                    PlayerWsPid ! {game_event, {game_cancelled, PlayerBalance}};
                                 _ ->
                                     ok
                             end
@@ -424,7 +433,7 @@ handle_info({'DOWN', _Ref, process, DeadPid, _Reason}, State = #state{status = w
 
                     %% Il creatore lascia e la partita è in waiting → cancelliamo la partita
                     delete_game(GameId),
-                    {stop, normal, noreply, State};
+                    {stop, normal, State};
                 _ ->
                     io:format("Player disconnected from the game waiting room: ~p~n", [Username]),
 
@@ -433,7 +442,7 @@ handle_info({'DOWN', _Ref, process, DeadPid, _Reason}, State = #state{status = w
                         [] ->
                             io:format("[LEAVE] Last player left, game cancelled~n"),
                             delete_game(GameId),
-                            {stop, normal, noreply, State};
+                            {stop, normal, State};
                         _ ->
                             %% Notifica agli altri
                             broadcast(NewPlayers, {user_left, Username}),
@@ -482,12 +491,6 @@ terminate(Reason, State = #state{game_id = GameId}) ->
         Ref -> erlang:cancel_timer(Ref)
     end,
 
-    %% Eventuali notifiche ai giocatori
-    %% lists:foreach(fun({Username, WsPid}) ->
-    %%                %% Puoi inviare un messaggio di chiusura WS
-    %%                WsPid ! {game_terminated, State#state.game_id}
-    %%            end, State#state.players),
-
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
@@ -528,48 +531,55 @@ decade_numbers(Decade) ->
     Start = (Decade - 1) * 10,
     lists:seq(Start, Start + 9).
 
-validate_win(Username, GameId, _CardId, Comb, Drawn) ->
-    Pattern = #card{user_id = Username, game_id = GameId, _ = '_'},
-    UserCards = mnesia:dirty_match_object(card, Pattern),
-    case UserCards of
+validate_win(Username, GameId, CardId, Comb, Drawn, Numbers) ->
+    Pattern = #card{card_id = CardId, user_id = Username, game_id = GameId, _ = '_'},
+    case mnesia:dirty_match_object(card, Pattern) of
         [] ->
             false;
+        [Card] ->
+            case Numbers of
+                [] ->
+                    false;
+                _ ->
+                    CardGrid = Card#card.grid,
+                    DrawnSet = sets:from_list(Drawn),
+                    lists:all(
+                        fun(N) ->
+                            lists:member(N, CardGrid) andalso sets:is_element(N, DrawnSet)
+                        end,
+                        Numbers
+                    ) andalso selection_respects_combination(Comb, CardGrid, Numbers)
+            end
+    end.
+
+selection_respects_combination(tombola, _CardGrid, SelectedNumbers) ->
+    length(SelectedNumbers) >= 15;
+selection_respects_combination(Comb, CardGrid, SelectedNumbers) ->
+    RequiredHits = comb_to_hits(Comb),
+    case RequiredHits of
+        0 ->
+            false;
         _ ->
-            DrawnSet = sets:from_list(Drawn),
+            Rows = [
+                lists:sublist(CardGrid, 5),
+                lists:sublist(lists:nthtail(5, CardGrid), 5),
+                lists:sublist(lists:nthtail(10, CardGrid), 5)
+            ],
+            length(SelectedNumbers) >= RequiredHits andalso
             lists:any(
-                fun(Card) ->
-                    card_has_combination(Card#card.grid, Comb, DrawnSet)
+                fun(Row) ->
+                    lists:all(fun(N) -> lists:member(N, Row) end, SelectedNumbers)
                 end,
-                UserCards
+                Rows
             )
     end.
 
-card_has_combination(Grid, tombola, DrawnSet) ->
-    count_marked(Grid, DrawnSet) =:= 15;
-card_has_combination(Grid, ambo, DrawnSet) ->
-    has_row_with_hits(Grid, DrawnSet, 2);
-card_has_combination(Grid, terno, DrawnSet) ->
-    has_row_with_hits(Grid, DrawnSet, 3);
-card_has_combination(Grid, quaterna, DrawnSet) ->
-    has_row_with_hits(Grid, DrawnSet, 4);
-card_has_combination(Grid, cinquina, DrawnSet) ->
-    has_row_with_hits(Grid, DrawnSet, 5);
-card_has_combination(_Grid, _UnknownComb, _DrawnSet) ->
-    false.
-
-has_row_with_hits(Grid, DrawnSet, RequiredHits) ->
-    Rows = [
-        lists:sublist(Grid, 5),
-        lists:sublist(lists:nthtail(5, Grid), 5),
-        lists:sublist(lists:nthtail(10, Grid), 5)
-    ],
-    lists:any(
-        fun(Row) -> count_marked(Row, DrawnSet) >= RequiredHits end,
-        Rows
-    ).
-
-count_marked(Numbers, DrawnSet) ->
-    length([N || N <- Numbers, sets:is_element(N, DrawnSet)]).
+comb_to_hits(ambo) -> 2;
+comb_to_hits(terno) -> 3;
+comb_to_hits(quaterna) -> 4;
+comb_to_hits(cinquina) -> 5;
+comb_to_hits(tombola) -> 15;
+comb_to_hits(_) -> 0.
 
 calculate_prize(ambo, Pot) -> erlang:trunc(Pot * 0.10);
 calculate_prize(terno, Pot) -> erlang:trunc(Pot * 0.15);
@@ -653,3 +663,25 @@ update_db(State) ->
     %% Scriviamo su Mnesia. Usiamo dirty_write perché è velocissimo in RAM
     %% e sovrascrive automaticamente il vecchio record con lo stesso game_id.
     mnesia:dirty_write(game, GameRecord).
+
+cancel_waiting_recovered_game(GameId, Players) ->
+    lists:foreach(
+        fun(Player) ->
+            {Username, PlayerWsPid} = case Player of
+                {U, WsPid, _Ready} -> {U, WsPid};
+                {U, WsPid} -> {U, WsPid};
+                U -> {U, undefined}
+            end,
+            PlayerBalance = remove_player_cards(Username, GameId, waiting),
+            case {is_pid(PlayerWsPid), PlayerBalance} of
+                {true, {error, _}} ->
+                    PlayerWsPid ! {error, leave_failed};
+                {true, _} ->
+                    PlayerWsPid ! {game_event, {game_cancelled, PlayerBalance}};
+                _ ->
+                    ok
+            end
+        end,
+        Players
+    ),
+    delete_game(GameId).

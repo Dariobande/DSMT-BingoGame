@@ -42,17 +42,20 @@ websocket_init(State) ->
                 end,
             case mnesia:transaction(F) of
                 {atomic, {ok, Username, GameId}} ->
-                    %% Trova PID della partita se esiste
-                    %% TODO se il game non esiste sul db -> partita cancellata, accesso regolare a lobby
+                    %% Se la partita in sessione non esiste più nel DB, ripulisci la sessione
+                    %% e forza accesso lobby al prossimo authenticate.
                     io:format("[CONNECTION] New websocket connection: ~p~n", [Username]),
                     RealGameId = case mnesia:dirty_read({game, GameId}) of
-                                    [#game{game_id=GameId}] -> GameId;
-                                    [] -> undefined     
+                                    [#game{game_id=GameId}] ->
+                                        GameId;
+                                    [] ->
+                                        update_game_id(Token, undefined),
+                                        undefined
                                  end,
                     {ok, #ws_state{
                         username = Username,
                         game_id = RealGameId,
-                        game_pid = resolve_game_pid(GameId),
+                        game_pid = resolve_game_pid(RealGameId),
                         session_token = Token
                     }};
                 {atomic, {error, not_found}} ->
@@ -89,25 +92,32 @@ handle_client_action(<<"authenticate">>, _Data, State = #ws_state{username = Use
             case GamePid of
                 undefined ->
                     %% Partita non esiste → ritiriamo su
-                    {ok, NewGamePid} = game_server:start(GameId, Username),
-                    io:format("[WS-INFO] Crashed game server restarted~n"),
-                    case game_server:reconnect(NewGamePid, Username, self()) of
-                        {ok, Cards, Drawn, Won, PlayerCount} -> 
-                            io:format("[WS-INFO] Reconnected to game: ~p~n", [Username]),
-                            %% Inseriscili nel payload JSON per il frontend:
-                            Reply = jsx:encode(#{
-                                <<"event">> => <<"restore_game">>, 
-                                <<"game_id">> => GameId,
-                                <<"cards">> => Cards,
-                                <<"drawn">> => Drawn,
-                                <<"won">> => Won,
-                                <<"player_count">> => PlayerCount
-                            }),
-                            {reply, {text, Reply}, State#ws_state{game_pid=NewGamePid}};
+                    case game_server:start(GameId, Username) of
+                        {ok, NewGamePid} ->
+                            io:format("[WS-INFO] Crashed game server restarted~n"),
+                            case game_server:reconnect(NewGamePid, Username, self()) of
+                                {ok, Cards, Drawn, Won, PlayerCount} -> 
+                                    io:format("[WS-INFO] Reconnected to game: ~p~n", [Username]),
+                                    %% Inseriscili nel payload JSON per il frontend:
+                                    Reply = jsx:encode(#{
+                                        <<"event">> => <<"restore_game">>, 
+                                        <<"game_id">> => GameId,
+                                        <<"cards">> => Cards,
+                                        <<"drawn">> => Drawn,
+                                        <<"won">> => Won,
+                                        <<"player_count">> => PlayerCount
+                                    }),
+                                    {reply, {text, Reply}, State#ws_state{game_pid=NewGamePid}};
+                                {error, Reason} ->
+                                    io:format("[WARNING] User [~p] failed to reconnect: ~p~n", [Username, Reason]),
+                                    io:format("[WS-INFO] Lobby access permitted: ~p~n", [Username]),
+                                    %% Non autorizzato → manda lobby
+                                    send_lobby(State, Username, atom_to_binary(balance_unchanged, utf8))
+                            end;
                         {error, Reason} ->
-                            io:format("[WARNING] User [~p] failed to reconnect: ~p~n", [Username, Reason]),
+                            io:format("[WARNING] Restart of game_server failed for game ~p: ~p~n", [GameId, Reason]),
+                            update_game_id(State#ws_state.session_token, undefined),
                             io:format("[WS-INFO] Lobby access permitted: ~p~n", [Username]),
-                            %% Non autorizzato → manda lobby
                             send_lobby(State, Username, atom_to_binary(balance_unchanged, utf8))
                     end;
                 Pid ->
@@ -274,8 +284,9 @@ handle_client_action(<<"start_game">>, _Data, State = #ws_state{username = User,
 handle_client_action(<<"claim_win">>, Data, State = #ws_state{username = User, game_pid = Pid}) ->
     Combination = binary_to_atom(maps:get(<<"combination">>, Data), utf8),
     CardId = maps:get(<<"card_id">>, Data, undefined),
+    Numbers = maps:get(<<"numbers">>, Data, []),
     
-    case game_server:claim_win(Pid, User, Combination, CardId) of
+    case game_server:claim_win(Pid, User, Combination, CardId, Numbers) of
         {ok, Prize, Balance} ->
             Reply = jsx:encode(#{<<"event">> => <<"win_accepted">>, <<"prize">> => Prize, <<"balance">> => Balance, <<"combination">> => atom_to_binary(Combination, utf8)}),
             {reply, {text, Reply}, State};

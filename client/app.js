@@ -268,12 +268,11 @@ function renderCard(grid, cardId, drawnNumbers = []) {
     const drawnSet = new Set(drawnNumbers.map(Number));
 
     const rows = buildCardRows(grid);
-    let currentRow = 0;
-    rows.forEach(row => {
+    rows.forEach((row, rowIndex) => {
         for (let columnIndex = 0; columnIndex < 9; columnIndex++) {
             const cell = document.createElement('div');
             cell.className = 'bingo-cell';
-            cell.id = 'card' + cardId + 'cell' + currentRow+columnIndex;
+            cell.id = 'card' + cardId + 'cell' + rowIndex + columnIndex;
 
             const number = row[columnIndex];
             if (number == null) {
@@ -290,7 +289,12 @@ function renderCard(grid, cardId, drawnNumbers = []) {
             }
             cell.onclick = () => {
                 if(claim_win !== null) {
-                    numbers = checkPossibleCombination(claim_win, currentRow, cardId);
+                    const numbers = checkPossibleCombination(claim_win, rowIndex, cardId);
+                    if(numbers.length === 0) {
+                        showError("You haven't selected enough numbers to claim this combination!");
+                        claim_win = null;
+                        return;
+                    }
                     ws.send(JSON.stringify({ action: "claim_win", combination: claim_win, card_id: cardId, numbers: numbers}));
                     claim_win = null;
                     return;
@@ -303,34 +307,40 @@ function renderCard(grid, cardId, drawnNumbers = []) {
             };
             cardDiv.appendChild(cell);
         }
-        currentRow++;
     });
     
     container.appendChild(cardDiv);
 }
 
-function checkPossibleCombination(comb) {
-    for (let card = 0; card < num_cards; card++) {
-        let clicked_cells = 0;
-        for (let row = 0; row < 3; row++) {
-            if (comb !== 'tombola') {
-                clicked_cells = 0;
-            }
-            let needed_cells = combToNumber(comb);
-            for (let column = 0; column < 9; column++) {
-                if(document.getElementById('card'+card+'cell'+row+column).style.backgroundColor == 'lightgreen') {
-                    clicked_cells++;
+function checkPossibleCombination(comb, row, cardId) {
+    const neededCells = combToNumber(comb);
+    const clickedNumbers = [];
+
+    if (comb === 'tombola') {
+        for (let r = 0; r < 3; r++) {
+            for (let c = 0; c < 9; c++) {
+                const cell = document.getElementById('card' + cardId + 'cell' + r + c);
+                if (!cell) continue;
+                if (cell.style.backgroundColor === 'lightgreen') {
+                    clickedNumbers.push(Number(cell.innerText));
                 }
             }
-            if (comb !== 'tombola' && clicked_cells >= needed_cells) {
-                return true;
+        }
+    } else {
+        for (let c = 0; c < 9; c++) {
+            const cell = document.getElementById('card' + cardId + 'cell' + row + c);
+            if (!cell) continue;
+            if (cell.style.backgroundColor === 'lightgreen') {
+                clickedNumbers.push(Number(cell.innerText));
             }
         }
-        if (comb === 'tombola' && clicked_cells >= '15') {
-            return true;
-        }
     }
-    return false;
+
+    if (clickedNumbers.length >= neededCells) {
+        return clickedNumbers;
+    }
+
+    return [];
 }
 
 function combToNumber(comb) {

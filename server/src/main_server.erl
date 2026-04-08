@@ -7,6 +7,7 @@
 
 -define(CLEANUP_INTERVAL, 3600000).
 -define(SESSION_TIMEOUT, 86400).
+-define(CARD_COST, 10).
 
 %% Lo stato mantiene la lista dei nodi da monitorare
 -record(state, {cowboy_nodes = []}).
@@ -82,38 +83,12 @@ handle_info({nodeup, Node}, State) ->
 
     %% Riallinea il nodo rientrato al cluster Mnesia (incluse ram_copies).
     ensure_node_db_consistency(Node),
-
-    %% Recupera tutte le partite in stato 'playing'
-    F = fun() -> mnesia:match_object(#game{game_id = '_', status = 'playing', creator = '_', players = '_', drawn_numbers = '_', pot = '_', won_combinations = '_'}) end,
-    case mnesia:transaction(F) of
-        {atomic, Games} ->
-            %% TODO si può levare tutta sta roba, tanto ripartono da soli. Non so come funziona però con Nginx se il nodo cade e poi riparte
-            lists:foreach(fun(Game) ->
-                GameId = Game#game.game_id,
-                Creator = Game#game.creator,
-                case global:whereis_name(GameId) of
-                    undefined ->
-                        %% Processo perso → lo ricreo
-                        {ok, _Pid} = game_server:start(GameId, Creator);
-                        %% TODO restore state
-                        %% gen_server:call(Pid, {restore_state, Game});
-                    _Pid ->
-                        %% Esiste già → skip
-                        ok
-                end
-            end, Games);
-        {aborted, Reason} ->
-            io:format("[MONITOR] Errore nel recupero giochi su nodeup (~p): ~p~n", [Node, Reason])
-    end,
     
     {noreply, State};
 
 handle_info({nodedown, Node}, State) ->
     io:format("~n[MONITOR] ATTENZIONE! Nodo andato OFFLINE: ~p~n", [Node]),
     %% In caso di down, Mnesia e i client (tramite Nginx) gestiranno il failover sugli altri nodi.
-    %% Potremmo aggiungere qui logiche di allerta o riavvio container via os:cmd se necessario in futuro.
-    %% TODO gestione rimborso cartelle e rimozione cartelle partite in waiting con processo che non esiste +
-    %% TODO poi eliminare questi #game dal DB
 
     F = fun() -> mnesia:match_object(#game{game_id = '_', status = 'waiting', creator = '_', players = '_', drawn_numbers = '_', pot = '_', won_combinations = '_'}) end,
     case mnesia:transaction(F) of
@@ -193,27 +168,57 @@ ensure_table_copy(Table, Node, Type) ->
     end.
 
 remove_players_cards(Users, GameId) ->
-    %% TODO for each User in Users, in GameId, remove cards and add cards prize to balance
-    Pattern = #card{user_id = Username, game_id = GameId, _ = '_'},
-    Cards = mnesia:dirty_match_object(card, Pattern),
-    Refund = length(Cards) * ?CARD_COST,
     lists:foreach(
-        fun(Card) ->
-            mnesia:dirty_delete_object(Card)
+        fun(Player) ->
+            refund_and_remove_user_cards(Player, GameId)
         end,
-        Cards
+        Users
     ),
-    F = fun() ->
-        [User] = mnesia:read(user, Username),
-        NewBalance = User#user.balance + Refund,
-        mnesia:write(User#user{balance = NewBalance}),
-        NewBalance
+    ok.
+
+refund_and_remove_user_cards(Player, GameId) ->
+    Username = case Player of
+        {U, _, _} -> U;
+        {U, _} -> U;
+        U -> U
     end,
+    PlayerWsPid = case Player of
+        {_, WsPid, _} when is_pid(WsPid) -> WsPid;
+        {_, WsPid} when is_pid(WsPid) -> WsPid;
+        _ -> undefined
+    end,
+    F = fun() ->
+        Pattern = #card{user_id = Username, game_id = GameId, _ = '_'},
+        Cards = mnesia:match_object(Pattern),
+        Refund = length(Cards) * ?CARD_COST,
+
+        lists:foreach(
+            fun(Card) ->
+                mnesia:delete_object(Card)
+            end,
+            Cards
+        ),
+
+        case mnesia:read(user, Username) of
+            [User] ->
+                NewBalance = User#user.balance + Refund,
+                mnesia:write(User#user{balance = NewBalance}),
+                {ok, NewBalance};
+            [] ->
+                {error, user_not_found}
+        end
+    end,
+
     case mnesia:transaction(F) of
-        {atomic, UpdatedBalance} ->
-            UpdatedBalance;
+        {atomic, {ok, PlayerBalance}} ->
+            io:format("[REFUND] Refunded cards for ~p in game ~p. New balance: ~p~n", [Username, GameId, PlayerBalance]),
+            PlayerWsPid ! {game_event, {game_cancelled, PlayerBalance}},
+            ok;
+        {atomic, {error, user_not_found}} ->
+            io:format("[REFUND] User not found during refund for game ~p: ~p~n", [GameId, Username]),
+            {error, user_not_found};
         {aborted, Reason} ->
-            io:format("[REFUND] Failed to update balance for ~p: ~p~n", [Username, Reason]),
+            io:format("[REFUND] Failed to refund/delete cards for ~p in game ~p: ~p~n", [Username, GameId, Reason]),
             {error, refund_failed}
     end.
 
