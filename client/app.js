@@ -5,6 +5,8 @@ let pingInterval = null;
 let clickCells = false;
 let num_cards = 0;
 let claim_win = null;
+let fadeTimeout;
+let hideTimeout;
 
 // --- API HTTP ---
 
@@ -463,19 +465,34 @@ function disableCombinationButton(combination) {
     if (btn) btn.disabled = true;
 }
 
-function showError(message, duration = 3000) {
+function showError(message, duration = 5000) {
     const errorDiv = document.getElementById('error-message');
-    errorDiv.innerText = message;
+
+    // Reset timeout precedenti
+    clearTimeout(fadeTimeout);
+    clearTimeout(hideTimeout);
+
+    // Reset stato visivo (forza restart animazione)
+    errorDiv.style.transition = 'none';
+    errorDiv.style.opacity = 1;
     errorDiv.style.display = 'block';
-    errorDiv.style.opacity = 1; // pieno
+
+    // Forza reflow (importantissimo)
+    void errorDiv.offsetWidth;
+
+    // Ripristina transizione
+    errorDiv.style.transition = 'opacity 2s ease-out';
+
+    // Imposta nuovo messaggio
+    errorDiv.innerText = message;
 
     // Dopo un breve delay, inizia il fade-out
-    setTimeout(() => {
+    fadeTimeout = setTimeout(() => {
         errorDiv.style.opacity = 0;
     }, 100); // ritardo minimo per far partire la transizione
 
     // Nasconde completamente dopo la durata
-    setTimeout(() => {
+    hideTimeout = setTimeout(() => {
         errorDiv.style.display = 'none';
     }, duration);
 }
