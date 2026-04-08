@@ -4,6 +4,7 @@ let currentGameId = undefined;
 let pingInterval = null;
 let clickCells = false;
 let num_cards = 0;
+let claim_win = null;
 
 // --- API HTTP ---
 
@@ -137,7 +138,7 @@ function handleServerMessage(msg) {
             break;
         case "card_bought":
             num_cards++;
-            renderCard(msg.grid);
+            renderCard(msg.grid, msg.card_id);
             document.getElementById('balance-display').innerText = msg.balance;
             break;
         case "game_started":
@@ -199,7 +200,7 @@ function handleServerMessage(msg) {
             document.getElementById('players-count-game').innerText = parseInt(msg.player_count) - 1;
             document.getElementById('last-number').innerText = msg.drawn.length > 0 ? String(msg.drawn[0]) : '';
             num_cards = msg.cards.length();
-            msg.cards.forEach(card => renderCard(card, msg.drawn));
+            msg.cards.forEach(card => renderCard(card.grid, card.card_id, msg.drawn));
             // Disabilita i bottoni di vincita per le combinazioni già vinte
             /*msg.won.forEach(comb => {
                 const btn = document.getElementById(`btn-${comb}`);
@@ -240,12 +241,12 @@ function startGame() {
 }
 
 function claimWin(combination) {
-    // TODO inviare numeri selezionati al server
-    if(!checkPossibleCombination(combination)) {
-        showError("You have not selected enough numbers!");
-        return;
+    claim_win = combination;
+    if (combination !== 'tombola') {
+        showError("Click on the row on which you want to claim the winning combination!");
+    } else {
+        showError("Click on the bingo card on which you want to claim BINGO!");
     }
-    ws.send(JSON.stringify({ action: "claim_win", combination: combination }));
 }
 
 function searchOpenGames() {
@@ -260,7 +261,7 @@ function readyToPlay() {
     ws.send(JSON.stringify({ action: "ready_to_play" }));
 }
 
-function renderCard(grid, drawnNumbers = []) {
+function renderCard(grid, cardId, drawnNumbers = []) {
     const container = document.getElementById('cards-container');
     const cardDiv = document.createElement('div');
     cardDiv.className = 'bingo-card';
@@ -272,7 +273,7 @@ function renderCard(grid, drawnNumbers = []) {
         for (let columnIndex = 0; columnIndex < 9; columnIndex++) {
             const cell = document.createElement('div');
             cell.className = 'bingo-cell';
-            cell.id = 'card'+num_cards+'cell'+currentRow+columnIndex;
+            cell.id = 'card' + cardId + 'cell' + currentRow+columnIndex;
 
             const number = row[columnIndex];
             if (number == null) {
@@ -288,6 +289,12 @@ function renderCard(grid, drawnNumbers = []) {
                 cell.style.backgroundColor = 'lightgreen';
             }
             cell.onclick = () => {
+                if(claim_win !== null) {
+                    numbers = checkPossibleCombination(claim_win, currentRow, cardId);
+                    ws.send(JSON.stringify({ action: "claim_win", combination: claim_win, card_id: cardId, numbers: numbers}));
+                    claim_win = null;
+                    return;
+                }
                 if(!clickCells) return;
                 if(cell.style.backgroundColor == 'lightgreen')
                     cell.style.backgroundColor = '';

@@ -353,7 +353,7 @@ handle_call({reconnect, Username, NewWsPid}, _From, State = #state{status = play
             Pattern = #card{user_id = Username, game_id = GameId, _ = '_'},
             UserCardsRecords = mnesia:dirty_match_object(card, Pattern),
             %% Estraiamo solo le griglie (liste di numeri) per mandarle al client
-            UserCards = [Card#card.grid || Card <- UserCardsRecords],
+            UserCards = [{Card#card.grid, Card#card.card_id} || Card <- UserCardsRecords],
 
             io:format("[RECONNECT] Player correctly reconnected: ~p~n",[Username]),
             

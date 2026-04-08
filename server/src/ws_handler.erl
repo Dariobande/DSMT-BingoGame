@@ -238,7 +238,7 @@ handle_client_action(<<"buy_card">>, _Data, State = #ws_state{username = User, g
     case game_server:buy_card(Pid, User) of
         {ok, Card, Balance} ->
             io:format("[WS-INFO] User bought a card: ~p~n", [User]),
-            Reply = jsx:encode(#{<<"event">> => <<"card_bought">>, <<"grid">> => Card#card.grid, <<"balance">> => Balance}),
+            Reply = jsx:encode(#{<<"event">> => <<"card_bought">>, <<"grid">> => Card#card.grid, <<"card_id">> => Card#card.card_id, <<"balance">> => Balance}),
             {reply, {text, Reply}, State};
         {error, Reason} ->
             io:format("[WARNING] User denied to buy a card: ~p~n", [User]),
