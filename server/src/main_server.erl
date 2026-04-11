@@ -144,7 +144,7 @@ ensure_node_db_consistency(Node) ->
 
     case rpc:call(Node, mnesia, wait_for_tables, [Tables, 15000]) of
         ok -> 
-            io:format("[MONITOR] Mnesia Db correctly started and updated on node  ~p: ~p~n", [Node, Other]),
+            io:format("[MONITOR] Mnesia Db correctly started and updated on node ~p~n", [Node]),
             ok;
         {timeout, Missing} ->
             io:format("[MONITOR] Timeout wait_for_tables on node ~p: ~p~n", [Node, Missing]);

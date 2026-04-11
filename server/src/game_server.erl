@@ -452,7 +452,7 @@ handle_info({'DOWN', _Ref, process, DeadPid, _Reason}, State = #state{status = w
     end;
 
 handle_info({'DOWN', _Ref, process, DeadPid, _Reason}, State = #state{status = playing, players = Players}) ->
-    io:format("[DISCONNECT] Player disconnected from started game: ~p~n", [Username]),
+    io:format("[DISCONNECT] Player disconnected from started game ~n"),
     case lists:keyfind(DeadPid, 2, Players) of
         false ->
             %% Not present in game
