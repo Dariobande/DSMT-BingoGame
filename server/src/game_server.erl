@@ -141,14 +141,14 @@ handle_call({join, Username, _WsPid}, _From, State) ->
     io:format("[WARNING] Player tried to join game not in waiting room: ~p~n",[Username]),
     {reply, {error, game_already_started}, State};
 
-handle_call({leave, Username}, _From, State = #state{creator = Creator, status = waiting, players = Players, game_id = GameId}) ->
+handle_call({leave, Username}, _From, State = #state{creator = Creator, status = waiting, players = Players, game_id = GameId, pot = CurrentPot}) ->
     case lists:keyfind(Username, 1, Players) of
         false ->
             %% Not present in game
             io:format("[WARNING] Player not in game tried to leave: ~p~n",[Username]),
             {reply, {error, player_not_in_game}, State};
         {_Username, _Pid, _Ready} ->
-            NewBalance = remove_player_cards(Username, GameId, waiting),
+            {NewBalance, NewPot} = remove_player_cards(Username, GameId, {waiting, CurrentPot}),
             case NewBalance of
                 {error, refund_failed} ->
                     {reply, {error, leave_failed}, State};
@@ -161,7 +161,7 @@ handle_call({leave, Username}, _From, State = #state{creator = Creator, status =
                             %% Remove and refund bingo cards of players
                             lists:foreach(
                                 fun({PlayerUsername, PlayerWsPid, _PlayerReady}) ->
-                                    PlayerBalance = remove_player_cards(PlayerUsername, GameId, waiting),
+                                    {PlayerBalance, _Pot} = remove_player_cards(PlayerUsername, GameId, {waiting, CurrentPot}),
                                     case {is_pid(PlayerWsPid), PlayerBalance} of
                                         {true, {error, _}} ->
                                             PlayerWsPid ! {error, leave_failed};
@@ -183,7 +183,7 @@ handle_call({leave, Username}, _From, State = #state{creator = Creator, status =
                             io:format("[LEAVE] Player left the game in waiting room: ~p~n",[Username]),
                             NewPlayers = lists:filter(fun({U, _, _}) -> U =/= Username end, Players),
                             broadcast(NewPlayers, {user_left, Username}),
-                            NewState = State#state{players = NewPlayers},
+                            NewState = State#state{players = NewPlayers, pot = NewPot},
                             update_db(NewState),
                             {reply, {ok, NewBalance}, NewState}
                     end
@@ -400,7 +400,7 @@ handle_info(draw_number, State = #state{status = playing, drawn = Drawn}) ->
             {noreply, State#state{drawn = NewDrawn, timer_ref = Ref}}
     end;
 
-handle_info({'DOWN', _Ref, process, DeadPid, _Reason}, State = #state{status = waiting, players = Players, creator = Creator, game_id = GameId}) ->
+handle_info({'DOWN', _Ref, process, DeadPid, _Reason}, State = #state{status = waiting, players = Players, creator = Creator, game_id = GameId, pot = CurrentPot}) ->
     io:format("[DISCONNECT] Web socket disconnected from unstarted game~n"),
     case lists:keyfind(DeadPid, 2, Players) of
         false ->
@@ -408,7 +408,7 @@ handle_info({'DOWN', _Ref, process, DeadPid, _Reason}, State = #state{status = w
             {noreply, State};
 
         {Username, DeadPid, _Ready} ->
-            remove_player_cards(Username, GameId, waiting),
+            {_NewBalance, NewPot} = remove_player_cards(Username, GameId, {waiting, CurrentPot}),
             case Username =:= Creator of
                 true -> 
                     io:format("[STOP] Creator left unstarted game, game cancelled~n"),
@@ -417,7 +417,7 @@ handle_info({'DOWN', _Ref, process, DeadPid, _Reason}, State = #state{status = w
                     %% Remove and refund bingo cards of players
                     lists:foreach(
                         fun({PlayerUsername, PlayerWsPid, _PlayerReady}) ->
-                            PlayerBalance = remove_player_cards(PlayerUsername, GameId, waiting),
+                            {PlayerBalance, _Pot} = remove_player_cards(PlayerUsername, GameId, {waiting, CurrentPot}),
                             case {is_pid(PlayerWsPid), PlayerBalance} of
                                 {true, {error, _}} ->
                                     PlayerWsPid ! {error, leave_failed};
@@ -444,7 +444,7 @@ handle_info({'DOWN', _Ref, process, DeadPid, _Reason}, State = #state{status = w
                         _ ->
                             %% Notify players
                             broadcast(NewPlayers, {user_left, Username}),
-                            NewState = State#state{players = NewPlayers},
+                            NewState = State#state{players = NewPlayers, pot = NewPot},
                             update_db(NewState),
                             {noreply, NewState}
                     end
@@ -614,16 +614,18 @@ remove_player_cards(Username, GameId, Status) ->
         Cards
     ),
     case Status of
-        waiting ->
+        {waiting, CurrentPot} ->
             F = fun() ->
                 [User] = mnesia:read(user, Username),
                 NewBalance = User#user.balance + Refund,
                 mnesia:write(User#user{balance = NewBalance}),
-                NewBalance
+                NewPot = CurrentPot - Refund,
+                mnesia:write(Game#game{pot = NewPot}),
+                {NewBalance, NewPot}
             end,
             case mnesia:transaction(F) of
-                {atomic, UpdatedBalance} ->
-                    UpdatedBalance;
+                {atomic, {UpdatedBalance, UpdatedPot}} ->
+                    {UpdatedBalance, UpdatedPot};
                 {aborted, Reason} ->
                     io:format("[REFUND] Failed to update balance for ~p: ~p~n", [Username, Reason]),
                     {error, refund_failed}
