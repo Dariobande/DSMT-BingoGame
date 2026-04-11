@@ -41,20 +41,19 @@ handle_call(_Request, _From, State) ->
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
-%% Timer activated! Time to clean.
+%% Timer activated to clean sessions
 handle_info(clean_old_sessions, State) ->
     io:format("~n[GARBAGE COLLECTOR] Session cleaning...~n"),
 
     Now = erlang:system_time(second),
     ExpirationTime = Now - ?SESSION_TIMEOUT,
 
-    %% Function that goes through sessions one by one
     F = fun() ->
         mnesia:foldl(
             fun(SessionRecord, Counter) ->
                 if 
                     SessionRecord#session.last_active < ExpirationTime ->
-                        %% It's too old! Delete it.
+                        %% Too old -> delete
                         mnesia:delete({session, SessionRecord#session.token}),
                         Counter + 1; %% Count how many we delete
                     true -> 
@@ -73,7 +72,7 @@ handle_info(clean_old_sessions, State) ->
             io:format("[GARBAGE COLLECTOR] Error during session cleaning: ~p~n", [Reason])
     end,
 
-    %% Reload the alarm for the next round!
+    %% Reload the alarm for the next round
     erlang:send_after(?CLEANUP_INTERVAL, self(), clean_old_sessions),
     {noreply, State};
 
@@ -88,7 +87,6 @@ handle_info({nodeup, Node}, State) ->
 
 handle_info({nodedown, Node}, State) ->
     io:format("~n[MONITOR] WARNING! Node went OFFLINE: ~p~n", [Node]),
-    %% In case of down, Mnesia and clients (via Nginx) will handle failover to other nodes.
 
     F = fun() -> mnesia:match_object(#game{game_id = '_', status = 'waiting', creator = '_', players = '_', drawn_numbers = '_', pot = '_', won_combinations = '_'}) end,
     case mnesia:transaction(F) of
@@ -114,8 +112,7 @@ handle_info(_Info, State) ->
 
 terminate(Reason, _State = #state{cowboy_nodes = Nodes}) ->
     io:format("Main Server in terminate: ~p. Monitored nodes: ~p~n", [Reason, Nodes]),
-    
-    %% Example: eventual DB cleanup or timer cancellation
+  
     db_manager:cleanup_cluster_db(Nodes),
 
     %% Shutting down remote nodes
@@ -131,7 +128,7 @@ code_change(_OldVsn, State, _Extra) ->
 ensure_node_db_consistency(Node) ->
     Tables = [user, session, game, card],
 
-    %% Avvia Mnesia sul nodo rientrato e collegalo al cluster DB.
+    %% Restart mnesia on node up and update it with current db status
     case rpc:call(Node, mnesia, start, []) of
         ok -> ok;
         {error, {already_started, mnesia}} -> ok;
@@ -140,13 +137,11 @@ ensure_node_db_consistency(Node) ->
     mnesia:change_config(extra_db_nodes, [Node]),
     rpc:call(Node, mnesia, change_config, [extra_db_nodes, [node()]]),
 
-    %% Re-attacha le copie tabella con il tipo previsto (disc/ram).
     ensure_table_copy(user, Node, disc_copies),
     ensure_table_copy(game, Node, disc_copies),
     ensure_table_copy(session, Node, ram_copies),
     ensure_table_copy(card, Node, ram_copies),
 
-    %% Aspetta che le tabelle siano disponibili anche sul nodo rientrato.
     case rpc:call(Node, mnesia, wait_for_tables, [Tables, 15000]) of
         ok -> 
             io:format("[MONITOR] Mnesia Db correctly started and updated on node  ~p: ~p~n", [Node, Other]),
@@ -167,8 +162,6 @@ ensure_table_copy(Table, Node, Type) ->
             io:format("[MONITOR] Table ~p updated failed on node ~p: ~p~n", [Table, Node, Reason])
     end.
 
-%%% ATOMIC cleanup function: cancella cartelle, rimborsa e cancella partita in ONE transaction
-%%% Previene race condition quando nodo crasha + client riconnette
 cleanup_waiting_game_atomic(GameId) ->
     F = fun() ->
         case mnesia:read(game, GameId) of

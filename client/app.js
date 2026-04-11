@@ -79,7 +79,7 @@ async function login() {
     }
 }
 
-// --- LOGICA WEBSOCKET ---
+// --- WEBSOCKET LOGIC ---
 
 function connectWebSocket() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -94,7 +94,6 @@ function connectWebSocket() {
 
         pingInterval = setInterval(() => {
             if (ws.readyState === WebSocket.OPEN) {
-                // You can send a simple string or JSON
                 ws.send(JSON.stringify({ action: 'ping' })); 
             }
         }, 30000);
@@ -112,7 +111,6 @@ function connectWebSocket() {
             showError("Connection lost. Please refresh the page to reconnect or wait for an automatic retry");
 
         clearInterval(pingInterval);
-        // Retry logic should be implemented here (useful in case of a node crash)
         setTimeout(connectWebSocket, 3000); 
     };
 }
@@ -200,7 +198,6 @@ function handleServerMessage(msg) {
             document.getElementById('players-count-game').innerText = parseInt(msg.player_count) - 1;
             document.getElementById('last-number').innerText = msg.drawn.length > 0 ? String(msg.drawn[0]) : '';
             msg.cards.forEach(card => renderCard(card.grid, card.card_id, msg.drawn));
-            // Disabilita i bottoni di vincita per le combinazioni già vinte
             /*msg.won.forEach(comb => {
                 const btn = document.getElementById(`btn-${comb}`);
                 if(btn) btn.disabled = true;
@@ -221,7 +218,7 @@ function handleServerMessage(msg) {
     }
 }
 
-// --- AZIONI GIOCO ---
+// --- GAME ACTIONS ---
 
 function createGame() {
     ws.send(JSON.stringify({ action: "create_game" }));
@@ -464,30 +461,23 @@ function disableCombinationButton(combination) {
 function showError(message, duration = 7000) {
     const errorDiv = document.getElementById('error-message');
 
-    // Reset timeout precedenti
     clearTimeout(fadeTimeout);
     clearTimeout(hideTimeout);
 
-    // Reset stato visivo (forza restart animazione)
     errorDiv.style.transition = 'none';
     errorDiv.style.opacity = 1;
     errorDiv.style.display = 'block';
 
-    // Forza reflow (importantissimo)
     void errorDiv.offsetWidth;
 
-    // Ripristina transizione
     errorDiv.style.transition = 'opacity 5s ease-out';
 
-    // Imposta nuovo messaggio
     errorDiv.innerText = message;
 
-    // Dopo un breve delay, inizia il fade-out
     fadeTimeout = setTimeout(() => {
         errorDiv.style.opacity = 0;
-    }, 100); // ritardo minimo per far partire la transizione
+    }, 100);
 
-    // Nasconde completamente dopo la durata
     hideTimeout = setTimeout(() => {
         errorDiv.style.display = 'none';
     }, duration);

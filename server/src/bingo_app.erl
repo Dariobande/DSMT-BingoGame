@@ -1,5 +1,5 @@
 -module(bingo_app).
--export([start/1]). %% Now accepts the port as a parameter!
+-export([start/1]).
 
 start(Port) ->
     %% Ensure Cowboy and dependencies are started
@@ -14,7 +14,6 @@ start(Port) ->
         ]}
     ]),
 
-    %% Use the port passed as parameter
     {ok, _} = cowboy:start_clear(list_to_atom("bingo_listener_" ++ integer_to_list(Port)),
         [{port, Port}],
         #{env => #{dispatch => Dispatch}}

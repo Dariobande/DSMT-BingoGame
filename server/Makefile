@@ -18,7 +18,6 @@ ebin:
 clean:
 	rm -f ebin/*.beam
 
-# Comando utility per pulire il database locale (Mnesia) se serve resettare
 clean-db:
 	rm -rf Mnesia.*
 

@@ -35,7 +35,6 @@ h2, h3 {
     line-height: 1;
 }
 
-/* Auth and Lobby Sections */
 #auth-section, #game-section, #register-section {
     background: white;
     padding: 30px;
@@ -59,7 +58,7 @@ h2, h3 {
 
 #register-section button, #auth-section button {
     width: auto;
-    align-self: center; /* or flex-start */
+    align-self: center;
 }
 
 .button-row {
@@ -97,7 +96,6 @@ button:hover {
     background-color: red;
 }
 
-/* Bingo Cards Layout */
 #cards-container {
     display: flex;
     flex-wrap: wrap;
@@ -108,7 +106,6 @@ button:hover {
 
 .bingo-card {
     display: grid;
-    /* Griglia tombola 3x9 con celle vuote */
     grid-template-columns: repeat(9, 1fr);
     gap: 5px;
     background-color: var(--primary-color);
@@ -140,7 +137,6 @@ button:hover {
     transform: scale(0.95);
 }
 
-/* Game Controls & Log */
 #controls {
     margin-top: 25px;
     padding-top: 15px;

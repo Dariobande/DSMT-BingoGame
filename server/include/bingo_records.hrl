@@ -18,7 +18,7 @@
     drawn_numbers,   %% List of already drawn numbers
     pot,             %% Total pot
     players,         %% List of participating usernames
-    won_combinations %% List of already claimed combinations (e.g. [{username, ambo}, {username, terno}]) to prevent double claims
+    won_combinations %% List of already claimed combinations (e.g. [ambo, terno...]) to prevent double claims
 }).
 
 %% Card Table
@@ -26,6 +26,5 @@
     card_id,          %% Unique primary key
     user_id,          %% Card owner
     game_id,          %% Referenced game
-    grid,             %% List of numbers (e.g. 15 numbers for bingo)
-    combinations_won  %% List of already claimed combinations (e.g. [ambo, terno]) to prevent double claims
+    grid             %% List of numbers (e.g. 15 numbers for bingo)
 }).
