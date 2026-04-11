@@ -620,7 +620,7 @@ remove_player_cards(Username, GameId, Status) ->
                 NewBalance = User#user.balance + Refund,
                 mnesia:write(User#user{balance = NewBalance}),
                 NewPot = CurrentPot - Refund,
-                mnesia:write(Game#game{pot = NewPot}),
+                mnesia:write(game, #game{game_id = GameId, pot = NewPot}),
                 {NewBalance, NewPot}
             end,
             case mnesia:transaction(F) of
