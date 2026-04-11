@@ -129,6 +129,7 @@ handle_auth(login, Body, Cookies) ->
                         {#{<<"status">> => <<"error">>, <<"message">> => <<"wrong_password">>}, undefined}
                 end;
             [] ->
+                io:format("[LOGIN] Login authentication failed: ~p~n",[Username]),
                 {#{<<"status">> => <<"error">>, <<"message">> => <<"user_not_found">>}, undefined}
         end
     end,

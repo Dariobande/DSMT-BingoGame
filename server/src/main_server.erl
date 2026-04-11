@@ -17,21 +17,22 @@ start_link(Nodes) ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, Nodes, []).
 
 init(Nodes) ->
-    io:format("Main Server in avvio... Connessione ai nodi: ~p~n", [Nodes]),
-    
+    io:format("~nMain Server initialization...~n"),
     %% Connessione esplicita ai nodi
     [net_adm:ping(Node) || Node <- Nodes],
     
     %% Attivazione del monitoraggio dei nodi
     net_kernel:monitor_nodes(true),
+    io:format("Connection established with nodes: ~p~n", [Nodes]),
     
     %% Inizializzazione del DB distribuito
     %% Includiamo anche il nodo corrente (node()) per avere una copia del DB sul Main Server
     AllNodes = [node() | Nodes],
     db_manager:init_cluster_db(AllNodes),
-    
+    io:format("Db started~n"),
     erlang:send_after(?CLEANUP_INTERVAL, self(), clean_old_sessions),
-
+    io:format("Session cleaner started~n"),
+    io:format("Main server started correctly~n~n"),
     {ok, #state{cowboy_nodes = Nodes}}.
 
 handle_call(_Request, _From, State) ->
@@ -42,7 +43,7 @@ handle_cast(_Msg, State) ->
 
 %% Il timer è scattato! È ora di pulire.
 handle_info(clean_old_sessions, State) ->
-    io:format("[GARBAGE COLLECTOR] Inizio pulizia sessioni vecchie...~n"),
+    io:format("~n[GARBAGE COLLECTOR] Session cleaning...~n"),
 
     Now = erlang:system_time(second),
     ExpirationTime = Now - ?SESSION_TIMEOUT,
@@ -67,19 +68,18 @@ handle_info(clean_old_sessions, State) ->
 
     case mnesia:transaction(F) of
         {atomic, DeletedCount} ->
-            io:format("[GARBAGE COLLECTOR] Pulizia completata! Rimosse ~p sessioni fantasma.~n", [DeletedCount]);
+            io:format("[GARBAGE COLLECTOR] Cleaning completed! ~p non-active sessions removed.~n", [DeletedCount]);
         {aborted, Reason} ->
-            io:format("[GARBAGE COLLECTOR] Errore durante la pulizia: ~p~n", [Reason])
+            io:format("[GARBAGE COLLECTOR] Error during session cleaning: ~p~n", [Reason])
     end,
 
     %% Ricarichiamo la sveglia per il prossimo giro!
     erlang:send_after(?CLEANUP_INTERVAL, self(), clean_old_sessions),
-
     {noreply, State};
 
 %% Gestione eventi di Node Up e Node Down
 handle_info({nodeup, Node}, State) ->
-    io:format("Nodo online: ~p, ripristino giochi...\n", [Node]),
+    io:format("[NODEUP] Node ~p is up, db update in progress...~n", [Node]),
 
     %% Riallinea il nodo rientrato al cluster Mnesia (incluse ram_copies).
     ensure_node_db_consistency(Node),
@@ -135,7 +135,7 @@ ensure_node_db_consistency(Node) ->
     case rpc:call(Node, mnesia, start, []) of
         ok -> ok;
         {error, {already_started, mnesia}} -> ok;
-        Other -> io:format("[MONITOR] Start Mnesia su ~p: ~p~n", [Node, Other])
+        Other -> io:format("[MONITOR] Start Mnesia on ~p: ~p~n", [Node, Other])
     end,
     mnesia:change_config(extra_db_nodes, [Node]),
     rpc:call(Node, mnesia, change_config, [extra_db_nodes, [node()]]),
@@ -148,21 +148,23 @@ ensure_node_db_consistency(Node) ->
 
     %% Aspetta che le tabelle siano disponibili anche sul nodo rientrato.
     case rpc:call(Node, mnesia, wait_for_tables, [Tables, 15000]) of
-        ok -> ok;
+        ok -> 
+            io:format("[MONITOR] Mnesia Db correctly started and updated on node  ~p: ~p~n", [Node, Other]),
+            ok;
         {timeout, Missing} ->
-            io:format("[MONITOR] Timeout wait_for_tables su ~p: ~p~n", [Node, Missing]);
+            io:format("[MONITOR] Timeout wait_for_tables on node ~p: ~p~n", [Node, Missing]);
         Error ->
-            io:format("[MONITOR] wait_for_tables errore su ~p: ~p~n", [Node, Error])
+            io:format("[MONITOR] wait_for_tables error on node ~p: ~p~n", [Node, Error])
     end.
 
 ensure_table_copy(Table, Node, Type) ->
     case mnesia:add_table_copy(Table, Node, Type) of
         {atomic, ok} ->
-            io:format("[MONITOR] Aggiunta copia ~p (~p) su ~p~n", [Table, Type, Node]);
+            io:format("[MONITOR] Table ~p (~p) correctly updated on node ~p~n", [Table, Type, Node]);
         {aborted, {already_exists, Table, Node}} ->
             ok;
         {aborted, Reason} ->
-            io:format("[MONITOR] add_table_copy fallita ~p su ~p: ~p~n", [Table, Node, Reason])
+            io:format("[MONITOR] Table ~p updated failed on node ~p: ~p~n", [Table, Node, Reason])
     end.
 
 %%% ATOMIC cleanup function: cancella cartelle, rimborsa e cancella partita in ONE transaction
@@ -214,10 +216,11 @@ cleanup_waiting_game_atomic(GameId) ->
                 
                 % Cancella la partita
                 mnesia:delete({game, GameId}),
+                io:format("[CLEANUP] Game ~p removed correctly from Db~n", [GameId]),
                 {ok, Notifications}
         end
     end,
-    
+    io:format("[CLEANUP] Cleaning of game ~p in progress...~n", [GameId]),
     case mnesia:transaction(F) of
         {atomic, {ok, Notifications}} ->
             lists:foreach(
@@ -226,9 +229,9 @@ cleanup_waiting_game_atomic(GameId) ->
                 end,
                 Notifications
             ),
-            io:format("[CLEANUP] Partita ~p ripulita atomicamente~n", [GameId]),
+            io:format("[CLEANUP] Game ~p cleaning completed~n", [GameId]),
             ok;
         {aborted, Reason} ->
-            io:format("[CLEANUP] Errore nella cleanup atomica di ~p: ~p~n", [GameId, Reason]),
+            io:format("[CLEANUP] Error during game ~p cleaning: ~p~n", [GameId, Reason]),
             {error, Reason}
     end.

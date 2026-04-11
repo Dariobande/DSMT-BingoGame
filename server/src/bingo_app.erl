@@ -3,6 +3,7 @@
 
 start(Port) ->
     %% Assicuriamoci che Cowboy e dipendenze siano avviati
+    io:format("[INFO] Server initialization...~n"),
     application:ensure_all_started(cowboy),
 
     Dispatch = cowboy_router:compile([
@@ -21,9 +22,9 @@ start(Port) ->
 
     case net_adm:ping('main_node@localhost') of
         pong ->
-            io:format("~n[INFO] Collegato al main node.~n", []);
+            io:format("[INFO] Connected to the main server.~n");
         pang ->
-            io:format("~n[WARNING] Impossibile collegarsi al main node all'avvio.~n", [])
+            io:format("[WARNING] Error during main server connection.~n")
     end,
     
-    io:format("~n[INFO] Server avviato sulla porta ~p!~n", [Port]).
+    io:format("[INFO] Server correctly started on port ~p!~n", [Port]).

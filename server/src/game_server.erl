@@ -66,7 +66,8 @@ init([GameId, Creator]) ->
     case mnesia:dirty_read(game, GameId) of
         [] ->
             %% CASO A: Nuova Partita! (Comportamento classico)
-            io:format("[CREATE] Nuova partita creata da: ~p~n", [Creator]),
+            io:format("[CREATE] New game created by: ~p~n", [Creator]),
+            %% TODO metterei la creazione e lo start come transaction? le altre update db vanno bene dirty
             InitialState = #state{
                 game_id = GameId, creator = Creator, status = waiting,
                 drawn = [], pot = 0, players = [], won_combinations = []
@@ -76,7 +77,7 @@ init([GameId, Creator]) ->
 
         [ExistingRecord] ->
             %% CASO B: Recupero post-crash! (Resurrezione)
-            io:format("[RECOVERY] Recupero stato partita: ~p~n", [GameId]),
+            io:format("[RECOVERY] Recovery of already started game: ~p~n", [GameId]),
 
             %% Traduciamo il record di Mnesia nello State del gen_server
             RecoveredState = #state{
@@ -97,7 +98,6 @@ init([GameId, Creator]) ->
                     Ref = erlang:send_after(?DRAW_INTERVAL, self(), draw_number),
                     RecoveredState#state{timer_ref = Ref};
                 waiting ->
-                    io:format("[RECOVERY] Waiting game ~p found without active process: atomically cleaning and refunding~n", [GameId]),
                     %% Cleanup atomico: previene race condition con main_server nodedown handler
                     cleanup_waiting_game_atomic(GameId),
                     stop_waiting_recovery;
@@ -107,8 +107,10 @@ init([GameId, Creator]) ->
 
             case FinalState of
                 stop_waiting_recovery ->
+                    io:format("[STOP] Recovered waiting room, game cancelled: ~p~n", [GameId]),
                     {stop, waiting_game_cancelled};
                 _ ->
+                    io:format("[RECOVERY] Game recovered and restarted: ~p~n", [GameId]),
                     {ok, FinalState}
             end
     end.
@@ -155,7 +157,7 @@ handle_call({leave, Username}, _From, State = #state{creator = Creator, status =
                 _ ->
                     case Username =:= Creator of
                         true -> 
-                            io:format("[LEAVE] Creator left unstarted game, game cancelled~n"),
+                            io:format("[STOP] Creator left unstarted game, game cancelled~n"),
                             NewPlayers = lists:filter(fun({U, _, _}) -> U =/= Username end, Players),
 
                             %% Rimuove/rimborsa le cartelle dei player rimanenti e notifica saldo aggiornato.
@@ -206,7 +208,7 @@ handle_call({leave, Username}, _From, State = #state{status = Status, players = 
                     NewPlayers = lists:filter(fun({U, _, _}) -> U =/= Username end, Players),
                     case NewPlayers of
                         [] ->
-                            io:format("[LEAVE] Last player left, game cancelled~n"),
+                            io:format("[STOP] Last player left, game cancelled~n"),
                             delete_game(GameId),
                             {stop, normal, {ok, Balance}, State};
                         _ ->
@@ -238,10 +240,10 @@ handle_call({buy_card, Username}, _From, State = #state{game_id = GameId, pot = 
                 io:format("[BUY] Player bought a card: ~p~n",[Username]),
                 {ok, NewCard, NewBalance};
             CardsCount >= ?MAX_CARDS -> 
-                io:format("[BUY] Player failed to buy a card due to max limit: ~p~n",[Username]),
+                io:format("[WARNING] Player failed to buy a card due to max limit: ~p~n",[Username]),
                 {error, max_cards_reached};
             true -> 
-                io:format("[BUY] Player failed to buy a card due to insufficient funds: ~p~n",[Username]),
+                io:format("[WARNING] Player failed to buy a card due to insufficient funds: ~p~n",[Username]),
                 {error, insufficient_funds}
         end
     end,
@@ -269,7 +271,7 @@ handle_call({start_game, Username}, _From, State = #state{creator = Creator, pla
             
             {reply, ok, State#state{status = playing, timer_ref = Ref}};
         _ ->
-            io:format("[WARNING] Not all users are ready: ~p~n",[Username]),
+            io:format("[WARNING] Not all users are ready to start~n"),
             {reply, {error, not_all_users_are_ready}, State}
     end;
 
@@ -312,7 +314,8 @@ handle_call({claim_win, Username, Comb, CardId, Numbers}, _From, State = #state{
                     broadcast(State#state.players, {winner, Username, Comb, Prize}),
                     
                     NewWon = [Comb | Won],
-                    
+                    io:format("[CLAIM-WIN] User [~p] claimed winning combination: ~p~n",[Username, Comb]),
+
                     %% If Tombola/Blackout, the game ends
                     if Comb =:= tombola ->
                         NewState = State#state{won_combinations = NewWon, status = finished},
@@ -325,6 +328,7 @@ handle_call({claim_win, Username, Comb, CardId, Numbers}, _From, State = #state{
                         {reply, {ok, Prize, NewBalance}, NewState}
                     end;
                 false ->
+                    io:format("[WARNING] User [~p] failed to claim winning combination: ~p~n",[Username, Comb]),
                     {reply, {error, invalid_claim}, State}
             end
     end;
@@ -404,6 +408,7 @@ handle_info(draw_number, State = #state{status = playing, drawn = Drawn}) ->
     end;
 
 handle_info({'DOWN', _Ref, process, DeadPid, _Reason}, State = #state{status = waiting, players = Players, creator = Creator, game_id = GameId}) ->
+    io:format("[DISCONNECT] Web socket disconnected from unstarted game~n"),
     case lists:keyfind(DeadPid, 2, Players) of
         false ->
             %% Non era un player → ignora
@@ -413,7 +418,7 @@ handle_info({'DOWN', _Ref, process, DeadPid, _Reason}, State = #state{status = w
             remove_player_cards(Username, GameId, waiting),
             case Username =:= Creator of
                 true -> 
-                    io:format("[LEAVE] Creator left unstarted game, game cancelled~n"),
+                    io:format("[STOP] Creator left unstarted game, game cancelled~n"),
                     NewPlayers = lists:filter(fun({U, _, _}) -> U =/= Username end, Players),
 
                     %% Rimuove/rimborsa le cartelle dei player rimanenti e notifica saldo aggiornato.
@@ -436,7 +441,7 @@ handle_info({'DOWN', _Ref, process, DeadPid, _Reason}, State = #state{status = w
                     delete_game(GameId),
                     {stop, normal, State};
                 _ ->
-                    io:format("Player disconnected from the game waiting room: ~p~n", [Username]),
+                    io:format("[DISCONNECT] Player disconnected from unstarted game: ~p~n", [Username]),
 
                     NewPlayers = lists:filter(fun({U, _, _}) -> U =/= Username end, Players),
                     case NewPlayers of
@@ -455,6 +460,7 @@ handle_info({'DOWN', _Ref, process, DeadPid, _Reason}, State = #state{status = w
     end;
 
 handle_info({'DOWN', _Ref, process, DeadPid, _Reason}, State = #state{status = playing, players = Players}) ->
+    io:format("[DISCONNECT] Player disconnected from started game: ~p~n", [Username]),
     case lists:keyfind(DeadPid, 2, Players) of
         false ->
             %% Non era un player → ignora
@@ -649,6 +655,7 @@ delete_game(GameId) ->
             {error, Reason}
     end.
 
+%% TODO forse qui meglio la transazione visto che il record della partita viene acceduto anche da altri quando il game_server crasha
 update_db(State) ->
     %% Costruiamo il record da salvare su DB prendendo i dati dallo Stato del server
     GameRecord = #game{

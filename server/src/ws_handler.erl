@@ -23,6 +23,7 @@ init(Req, _State) ->
     {cowboy_websocket, Req, #{session_token => SessionToken}}.
 
 websocket_init(State) ->
+    io:format("~n[WS-INFO] New web socket connection~n"),
     %% Ottieni il token dal state
     Token = maps:get(session_token, State, undefined),
 
@@ -44,7 +45,7 @@ websocket_init(State) ->
                 {atomic, {ok, Username, GameId}} ->
                     %% Se la partita in sessione non esiste più nel DB, ripulisci la sessione
                     %% e forza accesso lobby al prossimo authenticate.
-                    io:format("[CONNECTION] New websocket connection: ~p~n", [Username]),
+                    io:format("[WS-INFO] Connection granted: ~p~n", [Username]),
                     RealGameId = case mnesia:dirty_read({game, GameId}) of
                                     [#game{game_id=GameId}] ->
                                         GameId;
@@ -84,6 +85,7 @@ handle_client_action(<<"ping">>, _Data, State) ->
 
 %% Authenticate the user using the token provided after login
 handle_client_action(<<"authenticate">>, _Data, State = #ws_state{username = Username, game_id = GameId, game_pid = GamePid}) ->
+    io:format("~n[WS-INFO] Connection initialization...~n"),
     case GameId of
         undefined -> 
             io:format("[WS-INFO] Lobby access permitted: ~p~n", [Username]),
@@ -92,9 +94,9 @@ handle_client_action(<<"authenticate">>, _Data, State = #ws_state{username = Use
             case GamePid of
                 undefined ->
                     %% Partita non esiste → ritiriamo su
+                    io:format("[WS-INFO] Restarting crashed game server...~n"),
                     case game_server:start(GameId, Username) of
                         {ok, NewGamePid} ->
-                            io:format("[WS-INFO] Crashed game server restarted~n"),
                             case game_server:reconnect(NewGamePid, Username, self()) of
                                 {ok, Cards, Drawn, Won, PlayerCount} -> 
                                     io:format("[WS-INFO] Reconnected to game: ~p~n", [Username]),
@@ -114,6 +116,9 @@ handle_client_action(<<"authenticate">>, _Data, State = #ws_state{username = Use
                                     %% Non autorizzato → manda lobby
                                     send_lobby(State, Username, atom_to_binary(balance_unchanged, utf8))
                             end;
+                        {error, {already_started, _StartedPid}} ->
+                            io:format("[WARNING] Restart of game_server failed for game ~p: game already started~n", [GameId]),
+                            {stop, #{reason => game_server_already_started}};
                         {error, Reason} ->
                             io:format("[WARNING] Restart of game_server failed for game ~p: ~p~n", [GameId, Reason]),
                             update_game_id(State#ws_state.session_token, undefined),
@@ -121,6 +126,7 @@ handle_client_action(<<"authenticate">>, _Data, State = #ws_state{username = Use
                             send_lobby(State, Username, atom_to_binary(balance_unchanged, utf8))
                     end;
                 Pid ->
+                    io:format("[WS-INFO] Reconnecting to game server...~n"),
                     case game_server:reconnect(Pid, Username, self()) of
                         {ok, Cards, Drawn, Won, PlayerCount} ->
                             %% Ricollega il giocatore alla partita
@@ -281,9 +287,9 @@ handle_client_action(<<"ready_to_play">>, _Data, State = #ws_state{username = Us
 
 %% Start the game (Creator only)
 handle_client_action(<<"start_game">>, _Data, State = #ws_state{username = User, game_pid = Pid}) ->
-    io:format("[WS-INFO] User started the game: ~p~n", [User]),
     case game_server:start_game(Pid, User) of
         ok ->
+            io:format("[WS-INFO] User started the game: ~p~n", [User]),
             {ok, State};
         {error, Reason} -> 
             io:format("[WARNING] User [~p] start game failed: ~p~n", [User, Reason]),
@@ -299,9 +305,11 @@ handle_client_action(<<"claim_win">>, Data, State = #ws_state{username = User, g
     
     case game_server:claim_win(Pid, User, Combination, CardId, Numbers) of
         {ok, Prize, Balance} ->
+            io:format("[WS-INFO] User [~p] claimed winning combination: ~p~n", [User, Combination]),
             Reply = jsx:encode(#{<<"event">> => <<"win_accepted">>, <<"prize">> => Prize, <<"balance">> => Balance, <<"combination">> => atom_to_binary(Combination, utf8)}),
             {reply, {text, Reply}, State};
         {error, Reason} ->
+            io:format("[WS-INFO] User [~p] failed to claim winning combination [~p]: ~p~n", [User, Combination, Reason]),
             Reply = jsx:encode(#{<<"event">> => <<"error">>, <<"reason">> => atom_to_binary(Reason, utf8)}),
             {reply, {text, Reply}, State}
     end.
@@ -372,38 +380,47 @@ websocket_info({game_event, {number_drawn, Num}}, State) ->
     {reply, {text, Payload}, State};
 
 websocket_info({game_event, {winner, User, Comb, Prize}}, State) ->
+    io:format("[WS-INFO] Claim win event received for user ~p~n", [State#ws_state.username]),
     Payload = jsx:encode(#{<<"event">> => <<"winner_announced">>, <<"user">> => list_to_binary(User), <<"combination">> => atom_to_binary(Comb, utf8), <<"prize">> => Prize}),
     {reply, {text, Payload}, State};
 
 websocket_info({game_event, {game_started, Pot}}, State) ->
+    io:format("[WS-INFO] Game started event received for user ~p~n", [State#ws_state.username]),
     Payload = jsx:encode(#{<<"event">> => <<"game_started">>, <<"pot">> => Pot}),
     {reply, {text, Payload}, State};
 
 websocket_info({game_event, game_over}, State) ->
+    io:format("[WS-INFO] Game over event received for user ~p~n", [State#ws_state.username]),
     Payload = jsx:encode(#{<<"event">> => <<"game_over">>}),
     {reply, {text, Payload}, State};
 
 websocket_info({game_event, {user_left, User}}, State) ->
+    io:format("[WS-INFO] User left event received for user ~p~n", [State#ws_state.username]),
     Payload = jsx:encode(#{<<"event">> => <<"user_left">>, <<"user">> => list_to_binary(User)}),
     {reply, {text, Payload}, State};
 
 websocket_info({game_event, {user_reconnected, User}}, State) ->
+    io:format("[WS-INFO] User reconnected event received for user ~p~n", [State#ws_state.username]),
     Payload = jsx:encode(#{<<"event">> => <<"user_reconnected">>, <<"user">> => list_to_binary(User)}),
     {reply, {text, Payload}, State};
 
 websocket_info({game_event, {user_disconnected, User}}, State) ->
+    io:format("[WS-INFO] User disconnected event received for user ~p~n", [State#ws_state.username]),
     Payload = jsx:encode(#{<<"event">> => <<"user_disconnected">>, <<"user">> => list_to_binary(User)}),
     {reply, {text, Payload}, State};
 
 websocket_info({game_event, {user_joined, User}}, State) ->
+    io:format("[WS-INFO] User joined event received for user ~p~n", [State#ws_state.username]),
     Payload = jsx:encode(#{<<"event">> => <<"user_joined">>, <<"user">> => list_to_binary(User)}),
     {reply, {text, Payload}, State};
 
 websocket_info({game_event, all_ready}, State) ->
+    io:format("[WS-INFO] All users ready event received for user ~p~n", [State#ws_state.username]),
     Payload = jsx:encode(#{<<"event">> => <<"all_ready">>}),
     {reply, {text, Payload}, State};
 
 websocket_info({game_event, {user_ready, User}}, State) ->
+    io:format("[WS-INFO] User ready event received for user ~p~n", [State#ws_state.username]),
     Payload = jsx:encode(#{<<"event">> => <<"user_ready">>, <<"user">> => list_to_binary(User)}),
     {reply, {text, Payload}, State};
 
@@ -413,6 +430,7 @@ websocket_info({game_event, {game_cancelled, Balance}}, State) ->
     send_lobby(State, State#ws_state.username, <<"game_cancelled">>, Balance);
 
 websocket_info({game_event, {game_recovered, GamePid}}, State) ->
+    io:format("[WS-INFO] Game restored event received for user ~p~n", [State#ws_state.username]),
     NewState = State#ws_state{game_pid = GamePid},
     {ok, NewState};
 
