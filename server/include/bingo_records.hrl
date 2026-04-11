@@ -1,31 +1,31 @@
 %% include/bingo_records.hrl
 
-%% Tabella Utenti
+%% User Table
 -record(user, {
-    username,       %% Chiave primaria
-    password_hash,  %% Password criptata
+    username,       %% Primary key
+    password_hash,  %% Encrypted password
     salt,
-    balance         %% Denaro in-game
+    balance         %% In-game money
 }).
 
 -record(session, {token, username, game_id, last_active}).
 
-%% Tabella Partite
+%% Game Table
 -record(game, {
-    game_id,         %% Chiave primaria (es. UUID o stringa)
-    creator,         %% Username di chi ha creato la partita
-    status,          %% 'waiting' (attesa inizio), 'playing' (in corso), 'finished' (terminata)
-    drawn_numbers,   %% Lista dei numeri già estratti
-    pot,             %% Montepremi totale
-    players,         %% Lista degli username partecipanti
-    won_combinations %% Lista di combinazioni già reclamate (es. [{username, ambo}, {username, terno}]) per evitare doppi reclami
+    game_id,         %% Primary key (e.g. UUID or string)
+    creator,         %% Username of who created the game
+    status,          %% 'waiting' (waiting to start), 'playing' (in progress), 'finished' (finished)
+    drawn_numbers,   %% List of already drawn numbers
+    pot,             %% Total pot
+    players,         %% List of participating usernames
+    won_combinations %% List of already claimed combinations (e.g. [{username, ambo}, {username, terno}]) to prevent double claims
 }).
 
-%% Tabella Cartelle
+%% Card Table
 -record(card, {
-    card_id,          %% Chiave primaria univoca
-    user_id,          %% Proprietario della cartella
-    game_id,          %% Partita di riferimento
-    grid,             %% Lista di numeri (es. 15 numeri per la tombola)
-    combinations_won  %% Lista delle combinazioni già reclamate (es. [ambo, terno]) per evitare doppi reclami
+    card_id,          %% Unique primary key
+    user_id,          %% Card owner
+    game_id,          %% Referenced game
+    grid,             %% List of numbers (e.g. 15 numbers for bingo)
+    combinations_won  %% List of already claimed combinations (e.g. [ambo, terno]) to prevent double claims
 }).

@@ -62,24 +62,24 @@ reconnect(GamePid, Username, NewWsPid) ->
 %% --- Callbacks ---
 
 init([GameId, Creator]) ->
-    %% 1. Controlliamo se la partita esiste già nel Database
+    %% 1. Check if the game already exists in the Database
     case mnesia:dirty_read(game, GameId) of
         [] ->
-            %% CASO A: Nuova Partita! (Comportamento classico)
+            %% CASE A: New Game! (Classic behavior)
             io:format("[CREATE] New game created by: ~p~n", [Creator]),
-            %% TODO metterei la creazione e lo start come transaction? le altre update db vanno bene dirty
+            
             InitialState = #state{
                 game_id = GameId, creator = Creator, status = waiting,
                 drawn = [], pot = 0, players = [], won_combinations = []
             },
-            update_db(InitialState),
+            update_db_atomic(InitialState),
             {ok, InitialState};
 
         [ExistingRecord] ->
-            %% CASO B: Recupero post-crash! (Resurrezione)
+            %% CASE B: Post-crash recovery! (Resurrection)
             io:format("[RECOVERY] Recovery of already started game: ~p~n", [GameId]),
 
-            %% Traduciamo il record di Mnesia nello State del gen_server
+            %% Translate the Mnesia record to gen_server State
             RecoveredState = #state{
                 game_id = ExistingRecord#game.game_id,
                 creator = ExistingRecord#game.creator,
@@ -92,13 +92,13 @@ init([GameId, Creator]) ->
 
             broadcast(ExistingRecord#game.players, {game_recovered, self()}),
 
-            %% Se la partita era 'playing' quando è crashata, facciamo ripartire il timer!
+            %% If the game was 'playing' when it crashed, restart the timer!
             FinalState = case RecoveredState#state.status of
                 playing ->
                     Ref = erlang:send_after(?DRAW_INTERVAL, self(), draw_number),
                     RecoveredState#state{timer_ref = Ref};
                 waiting ->
-                    %% Cleanup atomico: previene race condition con main_server nodedown handler
+                    %% Atomic cleanup: prevents race condition with main_server nodedown handler
                     cleanup_waiting_game_atomic(GameId),
                     stop_waiting_recovery;
                 _ ->
@@ -134,7 +134,7 @@ handle_call({join, Username, WsPid}, _From, State = #state{status = waiting, pla
 
             {reply, {ok, PlayerCount}, NewState};
         {_Username, _OldPid, _Ready} ->
-            %% Già presente
+            %% Already present
             io:format("[WARNING] Player already in game: ~p~n",[Username]),
             {reply, {error, player_already_in_game}, State}
     end;
@@ -146,7 +146,7 @@ handle_call({join, Username, _WsPid}, _From, State) ->
 handle_call({leave, Username}, _From, State = #state{creator = Creator, status = waiting, players = Players, game_id = GameId}) ->
     case lists:keyfind(Username, 1, Players) of
         false ->
-            %% Non presente
+            %% Not present
             io:format("[WARNING] Player not in game tried to leave: ~p~n",[Username]),
             {reply, {error, player_not_in_game}, State};
         {_Username, _Pid, _Ready} ->
@@ -176,12 +176,12 @@ handle_call({leave, Username}, _From, State = #state{creator = Creator, status =
                                 NewPlayers
                             ),
 
-                            %% Il creatore lascia e la partita è in waiting → cancelliamo la partita
+                            %% The creator leaves and the game is waiting → cancel the game
                             delete_game(GameId),
 
                             {stop, normal, {game_cancelled, NewBalance}, State};
                         _ -> 
-                            %% Rimuovi il giocatore dalla lista (sia creatore dopo l'inizio del gioco sia giocatore normale)
+                            %% Remove the player from the list (both creator after game start and normal player)
                             io:format("[LEAVE] Player left the game in waiting room: ~p~n",[Username]),
                             NewPlayers = lists:filter(fun({U, _, _}) -> U =/= Username end, Players),
                             broadcast(NewPlayers, {user_left, Username}),
@@ -195,7 +195,7 @@ handle_call({leave, Username}, _From, State = #state{creator = Creator, status =
 handle_call({leave, Username}, _From, State = #state{status = Status, players = Players, game_id = GameId}) ->
     case lists:keyfind(Username, 1, Players) of
         false ->
-            %% Non presente
+            %% Not present
             io:format("[WARNING] Player not in game tried to leave: ~p~n",[Username]),
             {reply, {error, player_not_in_game}, State};
         {_Username, _Pid, _Ready} ->
@@ -203,7 +203,7 @@ handle_call({leave, Username}, _From, State = #state{status = Status, players = 
                 {error, refund_failed} ->
                     {reply, {error, leave_failed}, State};
                 Balance ->
-                    %% Rimuovi il giocatore dalla lista (sia creatore dopo l'inizio del gioco sia giocatore normale)
+                    %% Remove the player from the list (both creator after game start and normal player)
                     io:format("[LEAVE] Player left started game: ~p~n",[Username]),
                     NewPlayers = lists:filter(fun({U, _, _}) -> U =/= Username end, Players),
                     case NewPlayers of
@@ -263,7 +263,7 @@ handle_call({start_game, Username}, _From, State = #state{creator = Creator, pla
             Ref = erlang:send_after(?DRAW_INTERVAL, self(), draw_number),
             
             NewState = State#state{status = playing},
-            update_db(NewState),
+            update_db_atomic(NewState),
             
             %% Notify all players
             broadcast(State#state.players, {game_started, State#state.pot}),
@@ -648,14 +648,13 @@ delete_game(GameId) ->
     end,
     case mnesia:transaction(F) of
         {atomic, ok} ->
-            io:format("Partita ~p cancellata con successo da Mnesia~n", [GameId]),
+            io:format("Game ~p deleted successfully ~n", [GameId]),
             ok;
         {aborted, Reason} ->
-            io:format("Errore cancellando partita ~p: ~p~n", [GameId, Reason]),
+            io:format("Error during game removal ~p: ~p~n", [GameId, Reason]),
             {error, Reason}
     end.
 
-%% TODO forse qui meglio la transazione visto che il record della partita viene acceduto anche da altri quando il game_server crasha
 update_db(State) ->
     %% Costruiamo il record da salvare su DB prendendo i dati dallo Stato del server
     GameRecord = #game{
@@ -671,6 +670,26 @@ update_db(State) ->
     %% Scriviamo su Mnesia. Usiamo dirty_write perché è velocissimo in RAM
     %% e sovrascrive automaticamente il vecchio record con lo stesso game_id.
     mnesia:dirty_write(game, GameRecord).
+
+update_db_atomic(State) ->
+    F = fun() ->
+        GameRecord = #game{
+            game_id = State#state.game_id,
+            creator = State#state.creator,
+            status  = State#state.status,
+            players = State#state.players,
+            drawn_numbers = State#state.drawn,
+            pot = State#state.pot,
+            won_combinations = State#state.won_combinations
+        },
+        mnesia:write(GameRecord)
+    end,
+    case mnesia:transaction(F) of
+        {atomic, ok} ->
+            ok;
+        {aborted, Reason} ->
+            {error, Reason}
+    end.
 
 %%% ATOMIC cleanup function: cancella cartelle, rimborsa e cancella partita in ONE transaction
 %%% Previene race condition quando nodo crasha + client riconnette

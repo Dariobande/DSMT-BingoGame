@@ -9,24 +9,24 @@
 -define(SESSION_TIMEOUT, 86400).
 -define(CARD_COST, 10).
 
-%% Lo stato mantiene la lista dei nodi da monitorare
+%% The state maintains the list of nodes to monitor
 -record(state, {cowboy_nodes = []}).
 
-%% Avvio del Main Server passandogli la lista dei nodi Cowboy (es. ['node1@localhost', 'node2@localhost'])
+%% Starting the Main Server by passing it the list of Cowboy nodes (e.g. ['node1@localhost', 'node2@localhost'])
 start_link(Nodes) ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, Nodes, []).
 
 init(Nodes) ->
     io:format("~nMain Server initialization...~n"),
-    %% Connessione esplicita ai nodi
+    %% Explicit connection to nodes
     [net_adm:ping(Node) || Node <- Nodes],
     
-    %% Attivazione del monitoraggio dei nodi
+    %% Activation of node monitoring
     net_kernel:monitor_nodes(true),
     io:format("Connection established with nodes: ~p~n", [Nodes]),
     
-    %% Inizializzazione del DB distribuito
-    %% Includiamo anche il nodo corrente (node()) per avere una copia del DB sul Main Server
+    %% Distributed DB initialization
+    %% Also include the current node (node()) to have a DB copy on the Main Server
     AllNodes = [node() | Nodes],
     db_manager:init_cluster_db(AllNodes),
     io:format("Db started~n"),
@@ -41,28 +41,28 @@ handle_call(_Request, _From, State) ->
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
-%% Il timer è scattato! È ora di pulire.
+%% Timer activated! Time to clean.
 handle_info(clean_old_sessions, State) ->
     io:format("~n[GARBAGE COLLECTOR] Session cleaning...~n"),
 
     Now = erlang:system_time(second),
     ExpirationTime = Now - ?SESSION_TIMEOUT,
 
-    %% Funzione che scorre le sessioni una per una
+    %% Function that goes through sessions one by one
     F = fun() ->
         mnesia:foldl(
             fun(SessionRecord, Counter) ->
                 if 
                     SessionRecord#session.last_active < ExpirationTime ->
-                        %% È troppo vecchia! Eliminiamola.
+                        %% It's too old! Delete it.
                         mnesia:delete({session, SessionRecord#session.token}),
-                        Counter + 1; %% Contiamo quante ne eliminiamo
+                        Counter + 1; %% Count how many we delete
                     true -> 
-                        Counter %% La sessione è valida, andiamo avanti
+                        Counter %% The session is valid, let's continue
                 end
             end, 
-            0, %% Il contatore parte da 0
-            session %% Il nome della tabella
+            0, %% The counter starts from 0
+            session %% The name of the table
         )
     end,
 
@@ -73,22 +73,22 @@ handle_info(clean_old_sessions, State) ->
             io:format("[GARBAGE COLLECTOR] Error during session cleaning: ~p~n", [Reason])
     end,
 
-    %% Ricarichiamo la sveglia per il prossimo giro!
+    %% Reload the alarm for the next round!
     erlang:send_after(?CLEANUP_INTERVAL, self(), clean_old_sessions),
     {noreply, State};
 
-%% Gestione eventi di Node Up e Node Down
+%% Handling Node Up and Node Down events
 handle_info({nodeup, Node}, State) ->
     io:format("[NODEUP] Node ~p is up, db update in progress...~n", [Node]),
 
-    %% Riallinea il nodo rientrato al cluster Mnesia (incluse ram_copies).
+    %% Realign the returned node to the Mnesia cluster (including ram_copies).
     ensure_node_db_consistency(Node),
     
     {noreply, State};
 
 handle_info({nodedown, Node}, State) ->
-    io:format("~n[MONITOR] ATTENZIONE! Nodo andato OFFLINE: ~p~n", [Node]),
-    %% In caso di down, Mnesia e i client (tramite Nginx) gestiranno il failover sugli altri nodi.
+    io:format("~n[MONITOR] WARNING! Node went OFFLINE: ~p~n", [Node]),
+    %% In case of down, Mnesia and clients (via Nginx) will handle failover to other nodes.
 
     F = fun() -> mnesia:match_object(#game{game_id = '_', status = 'waiting', creator = '_', players = '_', drawn_numbers = '_', pot = '_', won_combinations = '_'}) end,
     case mnesia:transaction(F) of
@@ -97,10 +97,10 @@ handle_info({nodedown, Node}, State) ->
                 GameId = Game#game.game_id,
                 case global:whereis_name(GameId) of
                     undefined ->
-                        %% Processo perso → cleanup atomico per prevenire race condition con game_server recovery
+                        %% Lost process → atomic cleanup to prevent race condition with game_server recovery
                         cleanup_waiting_game_atomic(GameId);
                     _Pid ->
-                        %% Esiste già → skip
+                        %% Already exists → skip
                         ok
                 end
             end, Games);
@@ -115,10 +115,10 @@ handle_info(_Info, State) ->
 terminate(Reason, _State = #state{cowboy_nodes = Nodes}) ->
     io:format("Main Server in terminate: ~p. Monitored nodes: ~p~n", [Reason, Nodes]),
     
-    %% Esempio: eventuale pulizia DB o cancellazione timer
+    %% Example: eventual DB cleanup or timer cancellation
     db_manager:cleanup_cluster_db(Nodes),
 
-    %% Arresto dei nodi remoti
+    %% Shutting down remote nodes
     [rpc:call(Node, erlang, halt, []) || Node <- Nodes],
     
     ok.

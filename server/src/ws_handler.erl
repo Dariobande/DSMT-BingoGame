@@ -14,7 +14,7 @@
 }).
 
 init(Req, _State) ->
-    %% Legge i cookie dal client durante handshake
+    %% Read cookies from client during handshake
     CookiesList = cowboy_req:parse_cookies(Req),
     Cookies = maps:from_list(CookiesList),
     SessionToken = maps:get(<<"session_token">>, Cookies, undefined),
@@ -24,10 +24,10 @@ init(Req, _State) ->
 
 websocket_init(State) ->
     io:format("~n[WS-INFO] New web socket connection~n"),
-    %% Ottieni il token dal state
+    %% Get the token from state
     Token = maps:get(session_token, State, undefined),
 
-    %% Se non c'è token, lo state resta vuoto
+    %% If there's no token, the state remains empty
     case Token of
         undefined ->
             io:format("[ERROR] Invalid session token: connection denied~n"),
@@ -43,8 +43,8 @@ websocket_init(State) ->
                 end,
             case mnesia:transaction(F) of
                 {atomic, {ok, Username, GameId}} ->
-                    %% Se la partita in sessione non esiste più nel DB, ripulisci la sessione
-                    %% e forza accesso lobby al prossimo authenticate.
+                    %% If the session game no longer exists in DB, clean the session
+                    %% and force lobby access at next authenticate.
                     io:format("[WS-INFO] Connection granted: ~p~n", [Username]),
                     RealGameId = case mnesia:dirty_read({game, GameId}) of
                                     [#game{game_id=GameId}] ->
@@ -63,7 +63,7 @@ websocket_init(State) ->
                     io:format("[ERROR] Token not found: connection denied~n"),
                     {stop, #{reason => token_not_found}};
                 {aborted, Reason} ->
-                    %% In caso di errore di transazione
+                    %% In case of transaction error
                     io:format("[ERROR] Db error: ~p~n", [Reason]),
                     {stop, #{reason => db_error}}
             end
@@ -93,14 +93,14 @@ handle_client_action(<<"authenticate">>, _Data, State = #ws_state{username = Use
         _ -> 
             case GamePid of
                 undefined ->
-                    %% Partita non esiste → ritiriamo su
+                    %% Game doesn't exist → restart
                     io:format("[WS-INFO] Restarting crashed game server...~n"),
                     case game_server:start(GameId, Username) of
                         {ok, NewGamePid} ->
                             case game_server:reconnect(NewGamePid, Username, self()) of
                                 {ok, Cards, Drawn, Won, PlayerCount} -> 
                                     io:format("[WS-INFO] Reconnected to game: ~p~n", [Username]),
-                                    %% Inseriscili nel payload JSON per il frontend:
+                                    %% Insert them in the JSON payload for the frontend:
                                     Reply = jsx:encode(#{
                                         <<"event">> => <<"restore_game">>, 
                                         <<"game_id">> => GameId,
@@ -113,7 +113,7 @@ handle_client_action(<<"authenticate">>, _Data, State = #ws_state{username = Use
                                 {error, Reason} ->
                                     io:format("[WARNING] User [~p] failed to reconnect: ~p~n", [Username, Reason]),
                                     io:format("[WS-INFO] Lobby access permitted: ~p~n", [Username]),
-                                    %% Non autorizzato → manda lobby
+                                    %% Not authorized → send lobby
                                     send_lobby(State, Username, atom_to_binary(balance_unchanged, utf8))
                             end;
                         {error, {already_started, _StartedPid}} ->
@@ -129,7 +129,7 @@ handle_client_action(<<"authenticate">>, _Data, State = #ws_state{username = Use
                     io:format("[WS-INFO] Reconnecting to game server...~n"),
                     case game_server:reconnect(Pid, Username, self()) of
                         {ok, Cards, Drawn, Won, PlayerCount} ->
-                            %% Ricollega il giocatore alla partita
+                            %% Reconnect the player to the game
                             io:format("[WS-INFO] Reconnected to game: ~p~n", [Username]),
                             Reply = jsx:encode(#{
                                 <<"event">> => <<"restore_game">>, 
@@ -143,23 +143,23 @@ handle_client_action(<<"authenticate">>, _Data, State = #ws_state{username = Use
                         {error, Reason} ->
                             io:format("[WARNING] User [~p] failed to reconnect: ~p~n", [Username, Reason]),
                             io:format("[WS-INFO] Lobby access permitted: ~p~n", [Username]),
-                            %% Non autorizzato → manda lobby
+                            %% Not authorized → send lobby
                             send_lobby(State, Username, atom_to_binary(balance_unchanged, utf8))
                     end
             end
     end;
 
-%% 2. LA GUARDIA SVIZZERA (Protezione delle altre funzioni)
-%% Se un client prova a mandare "claim_win" o "buy_card" ma ha ancora username = undefined...
+%% 2. THE SWISS GUARD (Protection of other functions)
+%% If a client tries to send "claim_win" or "buy_card" but still has username = undefined...
 handle_client_action(_Action, _Data, State = #ws_state{username = undefined}) ->
-    %% ...lo blocchiamo restituendo un errore!
+    %% ...we block it by returning an error!
     io:format("[WARNING] Game operation without being logged~n"),
     Reply = jsx:encode(#{<<"event">> => <<"error">>, <<"reason">> => <<"Please login again">>}),
     {reply, {text, Reply}, State};
 
 handle_client_action(<<"search_open_games">>, _Data, State = #ws_state{username = Username, game_pid = undefined}) ->
     io:format("[WS-INFO] Lobby access permitted: ~p~n", [Username]),
-    %% prendi bilancio attuale dal db
+    %% Get current balance from db
     F = fun() ->
         case mnesia:read(user, Username) of
             [User] ->
@@ -176,7 +176,7 @@ handle_client_action(<<"search_open_games">>, _Data, State = #ws_state{username 
 
 %% Create a new game
 handle_client_action(<<"create_game">>, _Data, State = #ws_state{username = Username, game_pid = undefined, game_id = undefined}) ->
-    %% Genera un GameId unico 
+    %% Generate a unique GameId
     RawBytes = crypto:strong_rand_bytes(8),
     GameId = binary:encode_hex(RawBytes),
     
@@ -197,7 +197,7 @@ handle_client_action(<<"create_game">>, _Data, State = #ws_state{username = User
     
     
 handle_client_action(<<"create_game">>, _Data, State = #ws_state{username = Username, game_pid = _Pid, game_id = _GameId}) ->
-    %% l'utente è già in gioco
+    %% The user is already in a game
     io:format("[WARNING] User tried to create a new game while already being in a game: ~p~n", [Username]),
     Reply = jsx:encode(#{<<"event">> => <<"error">>, <<"reason">> => <<"You are already in game!">>}),
     {reply, {text, Reply}, State};
@@ -231,14 +231,14 @@ handle_client_action(<<"join_game">>, Data, State = #ws_state{username = Usernam
     end;
 
 handle_client_action(<<"join_game">>, _Data, State = #ws_state{username = Username, game_pid = _Pid, game_id = _GameId}) ->
-    %% l'utente è già in gioco
+    %% The user is already in a game
     io:format("[WARNING] User tried to join a new game while already being in a game: ~p~n", [Username]),
     Reply = jsx:encode(#{<<"event">> => <<"error">>, <<"reason">> => <<"You are already in game!">>}),
     {reply, {text, Reply}, State};
 
 %% Handle undefined game
 handle_client_action(_Action, _Data, State = #ws_state{username = Username, game_pid = undefined}) ->
-    %% ...lo blocchiamo restituendo un errore!
+    %% ...we block it by returning an error!
     io:format("[WARNING] User tried to do a game operation on non existing game: ~p~n", [Username]),
     Reply = jsx:encode(#{<<"event">> => <<"error">>, <<"reason">> => <<"You are not in game!">>}),
     {reply, {text, Reply}, State};

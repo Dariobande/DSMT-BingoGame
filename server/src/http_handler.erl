@@ -7,23 +7,23 @@
 init(Req0, State) ->
     io:format("[CONNECTION] New client connection~n"),
 
-    %% Legge i cookie
+    %% Read cookies
     CookiesList = cowboy_req:parse_cookies(Req0),
     Cookies = maps:from_list(CookiesList),
 
-    %% Legge l'azione dal router (register | login)
+    %% Read the action from the router (register | login)
     Action = hd(State),
     
-    %% Legge il corpo della richiesta
+    %% Read the request body
     {ok, Body, Req1} = cowboy_req:read_body(Req0),
 
-    %% Gestione login/register
+    %% Handle login/register
     {Response, MaybeSetCookie} = handle_auth(Action, Body, Cookies),
 
-    %% Invia la risposta JSON, eventualmente impostando il cookie
+    %% Send JSON response, optionally setting the cookie
     Req2 = case MaybeSetCookie of
         undefined ->
-            %% Nessun cookie da impostare
+            %% No cookie to set
             cowboy_req:reply(200,
                 #{<<"content-type">> => <<"application/json">>},
                 jsx:encode(Response),
@@ -37,7 +37,7 @@ init(Req0, State) ->
                 Req1, 
                 #{path => <<"/">>, http_only => true}
             ),
-            %% 2. DOPO spediamo la risposta usando il nuovo ReqWithCookie
+            %% 2. THEN send the response using the new ReqWithCookie
             cowboy_req:reply(200,
                 #{<<"content-type">> => <<"application/json">>},
                 jsx:encode(Response),
@@ -48,23 +48,23 @@ init(Req0, State) ->
     {ok, Req2, State}.
 
 handle_auth(register, Body, _Cookies) ->
-    %% Decodifica JSON
+    %% Decode JSON
     Decoded = jsx:decode(Body, [return_maps]),
     Username = binary_to_list(maps:get(<<"username">>, Decoded)),
     Password = maps:get(<<"password">>, Decoded),
     ConfirmPassword = maps:get(<<"confirm_password">>, Decoded),
 
-    %% Controlla che password e confirm_password coincidano
+    %% Check that password and confirm_password match
     case Password =:= ConfirmPassword of
         false ->
             io:format("[REGISTRATION] Registration failed, passwords do not match~n"),
             {#{<<"status">> => <<"error">>, <<"message">> => <<"passwords_do_not_match">>}, undefined};
         true ->
-            %% Procedi con Mnesia
+            %% Proceed with Mnesia
             F = fun() ->
                 case mnesia:read(user, Username) of
                     [] -> 
-                        %% Hash password e saldo iniziale
+                        %% Hash password and initial balance
                         {Hash, Salt} = hash_password(Password),
                         NewUser = #user{
                             username = Username,
@@ -87,7 +87,7 @@ handle_auth(register, Body, _Cookies) ->
 handle_auth(login, Body, Cookies) ->
     SessionToken = maps:get(<<"session_token">>, Cookies, undefined),
 
-    %% Decodifica JSON
+    %% Decode JSON
     Decoded = jsx:decode(Body, [return_maps]),
     Username = binary_to_list(maps:get(<<"username">>, Decoded)),
     Password = maps:get(<<"password">>, Decoded),
@@ -97,19 +97,19 @@ handle_auth(login, Body, Cookies) ->
             [User] ->
                 case verify_password(Password, User#user.password_hash, User#user.salt) of
                     true ->
-                        %% Se il token esiste ed è valido in DB
+                        %% If the token exists and is valid in DB
                         case SessionToken of
                             Token when is_binary(Token) ->
                                 case mnesia:read({session, Token}) of
                                     [#session{game_id = GameID}] ->
-                                        %% Token valido, restituisci game_id se presente
+                                        %% Valid token, return game_id if present
                                         io:format("[LOGIN] Login successful: ~p~n",[Username]),
                                         Response = #{<<"status">> => <<"ok">>,
                                                      <<"balance">> => User#user.balance,
                                                      <<"game_id">> => GameID},
                                         {Response, undefined};
                                     [] ->
-                                        %% Token non valido → genera nuovo token
+                                        %% Invalid token → generate new token
                                         NewTokenB64 = gen_new_token(Username),
                                         io:format("[LOGIN] Login successful: ~p~n",[Username]),
                                         Response = #{<<"status">> => <<"ok">>,
@@ -117,7 +117,7 @@ handle_auth(login, Body, Cookies) ->
                                         {Response, {session_token, NewTokenB64}}
                                 end;
                             _ ->
-                                %% Nessun token → genera nuovo token
+                                %% No token → generate new token
                                 NewTokenB64 = gen_new_token(Username),
                                 io:format("[LOGIN] Login successful: ~p~n",[Username]),
                                 Response = #{<<"status">> => <<"ok">>,
@@ -145,20 +145,20 @@ gen_new_token(Username) ->
     mnesia:write(#session{token = TokenB64, username = Username, game_id = undefined, last_active = Now}),
     TokenB64.
 
-%% Genera un nuovo Salt e calcola l'hash PBKDF2 della password
+%% Generate a new Salt and calculate the PBKDF2 hash of the password
 hash_password(Password) when is_binary(Password) ->
     Salt = crypto:strong_rand_bytes(16),
     Iterazioni = 10000,
     LunghezzaChiave = 32,
     HashBinario = crypto:pbkdf2_hmac(sha256, Password, Salt, Iterazioni, LunghezzaChiave),
-    %% Restituisce una tupla con Hash e Salt codificati in Base64 per salvarli facilmente nel DB
+    %% Returns a tuple with Hash and Salt encoded in Base64 for easy DB storage
     {base64:encode(HashBinario), base64:encode(Salt)}.
 
-%% Verifica se la password inserita, combinata col Salt salvato, produce l'hash salvato
+%% Verify if the entered password, combined with the saved Salt, produces the saved hash
 verify_password(PasswordInserita, HashSalvatoB64, SaltSalvatoB64) when is_binary(PasswordInserita) ->
     SaltBinario = base64:decode(SaltSalvatoB64),
     Iterazioni = 10000,
     LunghezzaChiave = 32,
     HashCalcolato = crypto:pbkdf2_hmac(sha256, PasswordInserita, SaltBinario, Iterazioni, LunghezzaChiave),
-    %% Se l'hash calcolato ora è identico a quello nel database, la password è corretta
+    %% If the calculated hash is now identical to the one in the database, the password is correct
     base64:encode(HashCalcolato) =:= HashSalvatoB64.

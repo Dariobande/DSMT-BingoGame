@@ -72,7 +72,7 @@ async function login() {
         document.getElementById('balance-display').innerText = data.balance;
         currentGameId = data.game_id;
         
-        // Inizializza la connessione WebSocket
+        // Initialize the WebSocket connection
         connectWebSocket();
     } else {
         document.getElementById('auth-msg').innerText = data.message;
@@ -94,7 +94,7 @@ function connectWebSocket() {
 
         pingInterval = setInterval(() => {
             if (ws.readyState === WebSocket.OPEN) {
-                // Puoi inviare una stringa semplice o un JSON
+                // You can send a simple string or JSON
                 ws.send(JSON.stringify({ action: 'ping' })); 
             }
         }, 30000);
@@ -112,7 +112,7 @@ function connectWebSocket() {
             showError("Connection lost. Please refresh the page to reconnect or wait for an automatic retry");
 
         clearInterval(pingInterval);
-        // Qui andrebbe implementata una logica di retry (utile in caso di crash di un nodo)
+        // Retry logic should be implemented here (useful in case of a node crash)
         setTimeout(connectWebSocket, 3000); 
     };
 }

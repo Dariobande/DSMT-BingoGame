@@ -3,19 +3,19 @@
 -include("../include/bingo_records.hrl").
 
 init_cluster_db(Nodes) ->
-    %% Assicuriamoci che Mnesia sia fermo su tutti i nodi prima di creare lo schema
+    %% Ensure Mnesia is stopped on all nodes before creating the schema
     rpc:multicall(Nodes, mnesia, stop, []),
     
-    %% Creazione dello schema distribuito sui nodi forniti
+    %% Creating distributed schema on provided nodes
     case mnesia:create_schema(Nodes) of
-        ok -> io:format("Schema Mnesia creato con successo sui nodi: ~p~n", [Nodes]);
-        {error, {Node, {already_exists, Node}}} -> io:format("Schema Mnesia gia' esistente.~n")
+        ok -> io:format("Mnesia schema successfully created on nodes: ~p~n", [Nodes]);
+        {error, {Node, {already_exists, Node}}} -> io:format("Mnesia schema already exists.~n")
     end,
 
-    %% Avvio di Mnesia su tutti i nodi
+    %% Starting Mnesia on all nodes
     rpc:multicall(Nodes, mnesia, start, []),
 
-    %% Creazione delle tabelle replicate
+    %% Creating replicated tables
     mnesia:create_table(user, [
         {attributes, record_info(fields, user)},
         {disc_copies, Nodes}
@@ -36,11 +36,11 @@ init_cluster_db(Nodes) ->
         {ram_copies, Nodes}
     ]),
 
-    %% Attesa che le tabelle siano pronte e sincronizzate
+    %% Waiting for tables to be ready and synchronized
     mnesia:wait_for_tables([user, game, card], 5000),
-    io:format("Database Mnesia inizializzato e tabelle pronte.~n").
+    io:format("Mnesia database initialized and tables ready.~n").
 
 cleanup_cluster_db(Nodes) ->
-    %% Stop Mnesia su tutti i nodi
+    %% Stop Mnesia on all nodes
     rpc:multicall(Nodes, mnesia, stop, []),
     ok.

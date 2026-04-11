@@ -59,7 +59,7 @@ h2, h3 {
 
 #register-section button, #auth-section button {
     width: auto;
-    align-self: center; /* oppure flex-start */
+    align-self: center; /* or flex-start */
 }
 
 .button-row {
