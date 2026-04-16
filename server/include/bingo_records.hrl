@@ -8,11 +8,17 @@
     balance         %% In-game money
 }).
 
--record(session, {token, username, game_id, last_active}).
+%% Session Table
+-record(session, {
+    token,          %% Session token
+    username,       
+    game_id, 
+    last_active     %% Timestamp of last activity
+}).
 
 %% Game Table
 -record(game, {
-    game_id,         %% Primary key (e.g. UUID or string)
+    game_id,         %% Primary key
     creator,         %% Username of who created the game
     status,          %% 'waiting' (waiting to start), 'playing' (in progress), 'finished' (finished)
     drawn_numbers,   %% List of already drawn numbers
@@ -23,8 +29,8 @@
 
 %% Card Table
 -record(card, {
-    card_id,          %% Unique primary key
-    user_id,          %% Card owner
-    game_id,          %% Referenced game
-    grid             %% List of numbers (e.g. 15 numbers for bingo)
+    card_id,         %% Primary key
+    user_id,         %% Card owner
+    game_id,         %% Referenced game
+    grid             %% List of numbers (15 numbers for bingo)
 }).
