@@ -166,11 +166,11 @@ cleanup_waiting_game_atomic(GameId) ->
     F = fun() ->
         case mnesia:read(game, GameId) of
             [] -> 
-                {ok, []}; % Partita non esiste
+                {ok, []}; %% Game not found
             [GameRecord] ->
                 Players = GameRecord#game.players,
                 
-                % Per ogni player: trova carte, cancella, rimborsa e prepara notifica WS post-commit
+                %% For each player, find their cards, calculate the refund, delete the cards, update the user's balance and prepare notifications
                 Notifications = lists:foldl(
                     fun(PlayerTuple, Acc) ->
                         {Username, PlayerWsPid} = case PlayerTuple of
@@ -207,7 +207,7 @@ cleanup_waiting_game_atomic(GameId) ->
                     Players
                 ),
                 
-                % Cancella la partita
+                %% Delete the game record
                 mnesia:delete({game, GameId}),
                 io:format("[CLEANUP] Game ~p removed correctly from Db~n", [GameId]),
                 {ok, Notifications}
