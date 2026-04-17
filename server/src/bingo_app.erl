@@ -1,7 +1,10 @@
 -module(bingo_app).
--export([start/1]).
+-export([start/1, start/2]).
 
 start(Port) ->
+    start(Port, "localhost").
+
+start(Port, MainServerHost) ->
     %% Ensure Cowboy and dependencies are started
     io:format("[INFO] Server initialization...~n"),
     application:ensure_all_started(cowboy),
@@ -19,7 +22,8 @@ start(Port) ->
         #{env => #{dispatch => Dispatch}}
     ),
 
-    case net_adm:ping('main_node@localhost') of
+    MainNode = list_to_atom("main_node@" ++ MainServerHost),
+    case net_adm:ping(MainNode) of
         pong ->
             io:format("[INFO] Connected to the main server.~n");
         pang ->
