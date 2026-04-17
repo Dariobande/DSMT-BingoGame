@@ -1,8 +1,8 @@
 - COWBOY NODE 1 (10.2.1.9)
-    erl -name node1@10.2.1.9 -setcookie bingo_secret_cookie -pa ebin/ -pa deps/jsx/ebin -pa deps/cowboy/ebin -pa deps/cowboy/deps/cowlib/ebin -pa deps/cowboy/deps/ranch/ebin -eval "bingo_app:start(8080, "10.2.1.35")."
+    erl -name node1@10.2.1.9 -setcookie bingo_secret_cookie -pa ebin/ -pa deps/jsx/ebin -pa deps/cowboy/ebin -pa deps/cowboy/deps/cowlib/ebin -pa deps/cowboy/deps/ranch/ebin -eval 'bingo_app:start(8080, "10.2.1.35").'
 
 - COWBOY NODE 2 (10.2.1.10)
-    erl -name node2@10.2.1.10 -setcookie bingo_secret_cookie -pa ebin/ -pa deps/jsx/ebin -pa deps/cowboy/ebin -pa deps/cowboy/deps/cowlib/ebin -pa deps/cowboy/deps/ranch/ebin -eval "bingo_app:start(8080, "10.2.1.35")."
+    erl -name node2@10.2.1.10 -setcookie bingo_secret_cookie -pa ebin/ -pa deps/jsx/ebin -pa deps/cowboy/ebin -pa deps/cowboy/deps/cowlib/ebin -pa deps/cowboy/deps/ranch/ebin -eval 'bingo_app:start(8080, "10.2.1.35").'
 
 - MAIN SERVER NODE (10.2.1.35)
     erl -name main_node@10.2.1.35 -setcookie bingo_secret_cookie -pa ebin/ -pa deps/jsx/ebin -pa deps/cowboy/ebin -pa deps/cowboy/deps/cowlib/ebin -pa deps/cowboy/deps/ranch/ebin -eval "main_server:start_link(['node1@10.2.1.9', 'node2@10.2.1.10'])."
