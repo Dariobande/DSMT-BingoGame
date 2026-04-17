@@ -169,7 +169,9 @@ function handleServerMessage(msg) {
             break;
         case "user_reconnected":
             playersCountJoin = document.getElementById('players-count-game');
-            playersCountJoin.innerText = parseInt(playersCountJoin.innerText) + 1;
+            playersCountJoin.innerText = msg.player_count !== undefined
+                ? msg.player_count
+                : parseInt(playersCountJoin.innerText) + 1;
             logMessage(`${msg.user} reconnected to the game.`);
             break;
         case "user_joined":

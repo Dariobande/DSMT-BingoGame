@@ -378,6 +378,11 @@ websocket_info({game_event, {user_left, User}}, State) ->
     Payload = jsx:encode(#{<<"event">> => <<"user_left">>, <<"user">> => list_to_binary(User)}),
     {reply, {text, Payload}, State};
 
+websocket_info({game_event, {user_reconnected, User, PlayerCount}}, State) ->
+    io:format("[WS-INFO] User reconnected event received for user ~p~n", [State#ws_state.username]),
+    Payload = jsx:encode(#{<<"event">> => <<"user_reconnected">>, <<"user">> => list_to_binary(User), <<"player_count">> => PlayerCount}),
+    {reply, {text, Payload}, State};
+
 websocket_info({game_event, {user_reconnected, User}}, State) ->
     io:format("[WS-INFO] User reconnected event received for user ~p~n", [State#ws_state.username]),
     Payload = jsx:encode(#{<<"event">> => <<"user_reconnected">>, <<"user">> => list_to_binary(User)}),

@@ -345,10 +345,14 @@ handle_call({reconnect, Username, NewWsPid}, _From, State = #state{status = play
             erlang:monitor(process, NewWsPid),
 
             NewPlayers = lists:keyreplace(Username, 1, Players, {Username, NewWsPid, Ready}),
-            PlayerCount = length(NewPlayers),
+            PlayerCount = length([
+                ok
+                || {_U, WsPid, _R} <- NewPlayers,
+                   is_pid(WsPid)
+            ]),
 
             %% Notify players
-            broadcast(NewPlayers, {user_reconnected, Username}),
+            broadcast(NewPlayers, {user_reconnected, Username, PlayerCount}),
 
             NewState = State#state{players = NewPlayers},
             update_db(NewState),
