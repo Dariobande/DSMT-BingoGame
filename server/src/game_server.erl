@@ -125,11 +125,7 @@ handle_call({join, Username, WsPid}, _From, State = #state{status = waiting, pla
                         _ -> not_ready
                     end,
             NewPlayers = [{Username, WsPid, Ready} | proplists:delete(Username, Players)],
-            PlayerCount = length([
-                ok
-                || {_U, WsPid, _R} <- NewPlayers,
-                   is_pid(WsPid)
-            ]),
+            PlayerCount = length(NewPlayers),
 
             NewState = State#state{players = NewPlayers},
             update_db(NewState),
