@@ -110,7 +110,7 @@ DSMT-BingoGame/
 
 ## 👨‍💻 Authors
 
-- **Dario Bandecchi** – [@Dariobande](https://github.com/Dariobande)
+- **Dario Bandecchi**
 - **Matteo Giugni**
 
 *Course*: Distributed Systems and Middleware Technologies (DSMT) – University of Pisa
