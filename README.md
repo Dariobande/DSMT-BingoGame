@@ -1,82 +1,122 @@
-# 🎯 Distributed Real-Time Bingo Platform
+# DSMT - Distributed Real-Time Bingo Platform
 
-[![Erlang/OTP](https://img.shields.io/badge/Erlang%2FOTP-24%2B-red.svg)](https://www.erlang.org/)
+[![Erlang/OTP](https://img.shields.io/badge/Language-Erlang%2FOTP%2024%2B-red.svg)](https://www.erlang.org/)
 [![Mnesia](https://img.shields.io/badge/Database-Mnesia-blue.svg)](https://erlang.org/doc/man/mnesia.html)
 [![Cowboy](https://img.shields.io/badge/Web%20Server-Cowboy-orange.svg)](https://github.com/ninenines/cowboy)
 [![NGINX](https://img.shields.io/badge/Load%20Balancer-NGINX-green.svg)](https://nginx.org/)
-[![License](https://img.shields.io/badge/License-MIT-brightgreen.svg)](#)
 
-A high-availability, fault-tolerant distributed multiplayer **Bingo / Tombola game engine** built with **Erlang/OTP**, **Mnesia DB**, **Cowboy**, and **NGINX**.
+This repository contains the design, Erlang/OTP implementation, and functional verification of a high-availability, fault-tolerant **Distributed Real-Time Multiplayer Bingo Platform** built using Mnesia DB, Cowboy Web Server, and NGINX load balancing.
 
-Developed for the *Distributed Systems and Middleware Technologies (DSMT)* course at the University of Pisa.
-
----
-
-## ✨ Key Features
-
-- **Actor Model Concurrency**: Isolated `gen_server` processes for each game room with real-time WebSocket communication.
-- **Distributed Database**: Multi-node Mnesia cluster combining persistent disk storage (`disc_copies`) for user accounts and in-memory replication (`ram_copies`) for real-time game states.
-- **Fault Tolerance & Auto-Refunds**: Automated node failure detection (`nodedown`). If a node crashes, an atomic transaction automatically refunds player card balances.
-- **Load Balancing**: NGINX reverse proxy distributing HTTP API and WebSocket connections using `least_conn`.
-- **Secure Authentication**: Passwords hashed with **PBKDF2-HMAC-SHA256** (10,000 iterations + 16-byte salt) and session tokens managed via `HttpOnly` cookies.
-- **Game Engine**: Real-time room creation, card purchasing, ready-checks, automated number drawing, and server-side verification for Ambo, Terno, Quaterna, Cinquina, and Bingo.
+The project was developed for the **Distributed Systems and Middleware Technologies** course (Master of Science in Computer Engineering, **Università di Pisa**).
 
 ---
 
-## 🛠️ Tech Stack
+## Project Overview
 
-| Layer | Component | Technology |
-| :--- | :--- | :--- |
-| **Backend Engine** | Concurrency & Logic | Erlang/OTP (`gen_server`, `rpc`, `net_kernel`) |
-| **Database** | Distributed DBMS | Mnesia DB (ACID Transactions) |
-| **HTTP & WS** | Web Framework | Cowboy (`cowboy_http`, `cowboy_websocket`) |
-| **Proxy** | Load Balancer | NGINX (`least_conn`) |
-| **Serialization** | JSON | `jsx` |
-| **Frontend** | User Interface | Vanilla JavaScript (ES6+), HTML5, CSS3 |
+The system implements a concurrent, multi-node Bingo (Tombola) engine using the Erlang Actor Model. The game logic relies on isolated state machines (`gen_server`) handling room creation, card distribution, synchronized number drawing, and server-side evaluation of winning combinations:
 
----
+$$C_{\text{win}} \in \{\text{Ambo}, \text{Terno}, \text{Quaterna}, \text{Cinquina}, \text{Bingo}\}$$
 
-## 🏛️ System Architecture Overview
-
-- **Main Orchestrator (`main_node`)**: Monitors cluster nodes, manages Mnesia schema synchronization, and runs background session garbage collection.
-- **Worker Nodes (`node1`, `node2`)**: Run Cowboy servers to process HTTP registration/login requests and maintain active WebSocket client connections.
-- **NGINX Proxy**: Entry point balancing traffic across worker nodes and handling WebSocket protocol upgrades.
+Key system properties include:
+- **High Concurrency & Isolation:** Each active game room runs as an autonomous `gen_server` process with real-time WebSocket state broadcasting.
+- **Distributed Data Replication:** Hybrid storage architecture utilizing Mnesia's `disc_copies` for persistent user accounts and `ram_copies` for volatile game and session states across worker nodes.
+- **Fault Tolerance & Automated Refunds:** Active cluster monitoring via `net_kernel`. In the event of a worker node crash (`nodedown`), an atomic transaction refunds player card investments to maintain data consistency.
+- **Security & Authentication:** Password protection using **PBKDF2-HMAC-SHA256** key derivation (10,000 iterations with 16-byte cryptographically secure salt) and HTTP-Only session tokens.
+- **Scalable Load Balancing:** Reverse proxy configuration using NGINX with `least_conn` routing for REST APIs and WebSocket upgrades.
 
 ---
 
-## 📁 Project Structure
+## Specifications & Data Schema
 
-```text
-DSMT-BingoGame/
-├── client/                     # Frontend Application (HTML/CSS/JS)
-│   ├── index.html              # UI Web Page
-│   ├── style.css               # Modern UI Styles
-│   └── app.js                  # Client WebSocket & UI Logic
-├── server/                     # Erlang Backend Core
+System data records and parameters are defined in [`bingo_records.hrl`](file:///Users/dariobandecchi/Documents/GitHub/DSMT-BingoGame/server/include/bingo_records.hrl) and managed transactionally via Mnesia:
+
+| Entity | Primary Key | Storage Engine | Record Fields | Description |
+| :--- | :---: | :---: | :--- | :--- |
+| **User (`user`)** | `username` | `disc_copies` | `username`, `password_hash`, `salt`, `balance` | Persistent account profile, credentials, and virtual balance |
+| **Session (`session`)** | `token` | `ram_copies` | `token`, `username`, `game_id`, `last_active` | Active client session mapping and heartbeat timestamp |
+| **Game (`game`)** | `game_id` | `ram_copies` | `game_id`, `creator`, `status`, `drawn_numbers`, `pot`, `players`, `won_combinations` | Global game state, pot total, and claimed combination flags |
+| **Card (`card`)** | `card_id` | `ram_copies` | `card_id`, `user_id`, `game_id`, `grid` | Player card instance containing 15 unique numbers |
+
+### Winning Conditions & Combination Logic
+
+Winning claims are evaluated server-side upon receiving a `claim_win` event. Valid winning combinations on a 15-number grid (3 rows of 5 numbers) are strictly ordered:
+
+| Combination | Required Matched Numbers | Scope | Description |
+| :--- | :---: | :---: | :--- |
+| **Ambo** | 2 numbers | Single row | First player to match 2 drawn numbers on any single row |
+| **Terno** | 3 numbers | Single row | First player to match 3 drawn numbers on any single row |
+| **Quaterna** | 4 numbers | Single row | First player to match 4 drawn numbers on any single row |
+| **Cinquina** | 5 numbers | Single row | First player to match all 5 drawn numbers on any single row |
+| **Bingo** | 15 numbers | Full card | First player to match all 15 drawn numbers across all 3 rows |
+
+---
+
+## Architecture & System Design Details
+
+The top-level distributed architecture is modular and partitioned into five core sub-blocks:
+
+1. **Orchestrator Node ([`main_server.erl`](file:///Users/dariobandecchi/Documents/GitHub/DSMT-BingoGame/server/src/main_server.erl)):**
+   - Monitors cluster node states using `net_kernel:monitor_nodes/2`.
+   - Coordinates multi-node Mnesia schema initialization and node join procedures (`db_manager:init_db/1`).
+   - Implements automated recovery routines on `nodedown` events to refund affected players.
+   - Executes periodic background cleanup routines for expired sessions.
+
+2. **Game State Machine ([`game_server.erl`](file:///Users/dariobandecchi/Documents/GitHub/DSMT-BingoGame/server/src/game_server.erl)):**
+   - Implements finite state transitions (`waiting` -> `playing` -> `finished`).
+   - Manages card purchasing transactions, player ready synchronization, and automated number generation ($1 \dots 90$).
+   - Validates client win claims against drawn number sequences and updates game pot distribution.
+
+3. **Database & Storage Manager ([`db_manager.erl`](file:///Users/dariobandecchi/Documents/GitHub/DSMT-BingoGame/server/src/db_manager.erl), [`bingo_records.hrl`](file:///Users/dariobandecchi/Documents/GitHub/DSMT-BingoGame/server/include/bingo_records.hrl)):**
+   - Manages Mnesia distributed tables and schema setup across nodes.
+   - Executes atomic transactions (`mnesia:transaction/1`) ensuring thread-safe balance updates, session creation, and card allocation.
+
+4. **HTTP & WebSocket Gateway ([`bingo_app.erl`](file:///Users/dariobandecchi/Documents/GitHub/DSMT-BingoGame/server/src/bingo_app.erl), [`http_handler.erl`](file:///Users/dariobandecchi/Documents/GitHub/DSMT-BingoGame/server/src/http_handler.erl), [`ws_handler.erl`](file:///Users/dariobandecchi/Documents/GitHub/DSMT-BingoGame/server/src/ws_handler.erl)):**
+   - Configures Cowboy HTTP routing for REST authentication endpoints (`/api/register`, `/api/login`).
+   - Handles low-latency WebSocket upgrades (`/ws`) for bidirectional event streaming (`create_game`, `buy_card`, `set_ready`, `claim_win`).
+
+5. **Load Balancer & Client Interface ([`nginx.conf`](file:///Users/dariobandecchi/Documents/GitHub/DSMT-BingoGame/nginx.conf), [`client/app.js`](file:///Users/dariobandecchi/Documents/GitHub/DSMT-BingoGame/client/app.js)):**
+   - NGINX reverse proxy distributing web requests using the `least_conn` strategy.
+   - Lightweight Single-Page Application (SPA) built with vanilla HTML5/CSS3/JS rendering real-time game cards, drawn numbers, and active room states.
+
+---
+
+## Repository Structure
+
+```
+.
+├── client/                     # Frontend Application Files
+│   ├── index.html              # Main Web Application Page
+│   ├── style.css               # User Interface Styling
+│   └── app.js                  # Client WebSocket Client & UI Controller
+├── server/                     # Erlang/OTP Backend Source Code
 │   ├── include/
-│   │   └── bingo_records.hrl   # Mnesia DB Record Schema
+│   │   └── bingo_records.hrl   # Mnesia DB Record Schemas
 │   ├── src/
-│   │   ├── bingo_app.erl       # Application Bootstrap & Cowboy Router
-│   │   ├── main_server.erl     # Orchestrator & Fault Manager
-│   │   ├── game_server.erl     # Individual Game FSM
-│   │   ├── db_manager.erl      # Mnesia Distributed Setup
-│   │   ├── http_handler.erl    # REST API Handler
-│   │   └── ws_handler.erl      # WebSocket Handler
-│   ├── Makefile                # Build Script
-│   └── start_cluster.sh        # Local Startup Script
-├── nginx.conf                  # Load Balancer Configuration
-└── commands.txt                # Distributed Command Reference
+│   │   ├── bingo_app.erl       # Cowboy Server Routing & Application Entrypoint
+│   │   ├── main_server.erl     # Cluster Orchestrator & Node Monitoring
+│   │   ├── game_server.erl     # Room Finite State Machine (gen_server)
+│   │   ├── db_manager.erl      # Distributed Mnesia Setup & Data Operations
+│   │   ├── http_handler.erl    # REST API Registration/Login Handlers
+│   │   └── ws_handler.erl      # Real-Time WebSocket Request/Event Handler
+│   ├── Makefile                # Compilation & Environment Clean Script
+│   └── start_cluster.sh        # Local Multi-Node Cluster Launcher
+├── nginx.conf                  # Load Balancer & Reverse Proxy Configuration
+└── commands.txt                # Multi-Host Command Execution Reference
 ```
 
+> **Note on omitted folders (`ebin/`, `Mnesia.*/`, `deps/`):**  
+> Compiled Erlang beam files (`ebin/`), local database transaction logs (`Mnesia.*/`), and third-party dependencies (`deps/cowboy`, `deps/jsx`) are excluded from version control to maintain a clean workspace. Dependencies are compiled automatically via `Makefile`.
+
 ---
 
-## 🚀 Quickstart
+## Cluster Setup & Execution Guide
 
 ### Prerequisites
-- Erlang/OTP 24+
-- GNU Make
+- **Erlang/OTP 24+**
+- **GNU Make**
+- **NGINX** (for multi-node production deployment)
 
-### Run Locally (3-Node Cluster)
+### Local 3-Node Cluster Execution
 
 1. **Compile Backend**:
    ```bash
@@ -85,38 +125,71 @@ DSMT-BingoGame/
    make
    ```
 
-2. **Start Cluster**:
+2. **Launch Cluster Nodes**:
    ```bash
    chmod +x start_cluster.sh
    ./start_cluster.sh
    ```
+   This script initializes two Cowboy worker nodes (`node1@localhost`, `node2@localhost`) and the orchestrator node (`main_node@localhost`).
 
-3. **Launch Frontend**:
-   Open `client/index.html` in your web browser.
+3. **Access Frontend**:
+   Open [`client/index.html`](file:///Users/dariobandecchi/Documents/GitHub/DSMT-BingoGame/client/index.html) directly in a web browser, or serve it via NGINX.
+
+### Distributed Multi-Host Deployment
+
+To run across separate physical host machines (as configured in [`commands.txt`](file:///Users/dariobandecchi/Documents/GitHub/DSMT-BingoGame/commands.txt)):
+
+1. **Start Worker Node 1 (`10.2.1.9`):**
+   ```bash
+   erl -name node1@10.2.1.9 -setcookie bingo_secret_cookie \
+       -pa ebin/ -pa deps/jsx/ebin -pa deps/cowboy/ebin -pa deps/cowboy/deps/cowlib/ebin -pa deps/cowboy/deps/ranch/ebin \
+       -eval 'bingo_app:start(8080, "10.2.1.35").'
+   ```
+
+2. **Start Worker Node 2 (`10.2.1.10`):**
+   ```bash
+   erl -name node2@10.2.1.10 -setcookie bingo_secret_cookie \
+       -pa ebin/ -pa deps/jsx/ebin -pa deps/cowboy/ebin -pa deps/cowboy/deps/cowlib/ebin -pa deps/cowboy/deps/ranch/ebin \
+       -eval 'bingo_app:start(8080, "10.2.1.35").'
+   ```
+
+3. **Start Main Orchestrator Node (`10.2.1.35`):**
+   ```bash
+   erl -name main_node@10.2.1.35 -setcookie bingo_secret_cookie \
+       -pa ebin/ -pa deps/jsx/ebin -pa deps/cowboy/ebin -pa deps/cowboy/deps/cowlib/ebin -pa deps/cowboy/deps/ranch/ebin \
+       -eval "main_server:start_link(['node1@10.2.1.9', 'node2@10.2.1.10'])."
+   ```
+
+4. **Run NGINX Reverse Proxy (`10.2.1.36`):**
+   Apply [`nginx.conf`](file:///Users/dariobandecchi/Documents/GitHub/DSMT-BingoGame/nginx.conf) and start NGINX:
+   ```bash
+   nginx -c /path/to/nginx.conf
+   ```
 
 ---
 
-## 🔌 API & WebSocket Reference
+## API & Protocol Reference
 
 ### HTTP REST API
-- `POST /api/register` – Create user account.
-- `POST /api/login` – Authenticate user and receive HTTP-Only session token.
 
-### WebSocket Events (`/ws`)
-- **Client Actions**: `create_game`, `join_game`, `buy_card`, `set_ready`, `claim_win`, `leave_game`.
-- **Server Events**: `game_created`, `card_bought`, `number_drawn`, `win_announced`, `game_cancelled`.
+| Endpoint | Method | Payload | Description |
+| :--- | :---: | :--- | :--- |
+| `/api/register` | `POST` | `{"username": "...", "password": "..."}` | Registers a new user account with default balance |
+| `/api/login` | `POST` | `{"username": "...", "password": "..."}` | Authenticates user and returns an `HttpOnly` session cookie |
 
----
+### WebSocket Protocol (`/ws`)
 
-## 👨‍💻 Authors
+#### Client Requests
+- `create_game`: Requests creation of a new game room instance.
+- `join_game`: Connects player to a waiting game room.
+- `buy_card`: Purchases one or more Bingo cards (deducting balance).
+- `set_ready`: Signals readiness to start number extraction.
+- `claim_win`: Submits a claim for Ambo, Terno, Quaterna, Cinquina, or Bingo.
+- `leave_game`: Disconnects player and cleans up active room reference.
 
-- **Dario Bandecchi**
-- **Matteo Giugni**
-
-*Course*: Distributed Systems and Middleware Technologies (DSMT) – University of Pisa
-
----
-
-## 📜 License
-
-Distributed under the **MIT License**.
+#### Server Events
+- `game_created`: Broadcasts new game ID and room status.
+- `card_bought`: Returns generated 15-number card grid to player.
+- `number_drawn`: Streams newly drawn number (1–90) to all room participants.
+- `win_announced`: Broadcasts validated winner details and payout updates.
+- `game_cancelled`: Sent upon player disconnection or node failure refund processing.
