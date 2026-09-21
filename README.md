@@ -104,17 +104,33 @@ The top-level distributed architecture is modular and partitioned into five core
 └── commands.txt                # Multi-Host Command Execution Reference
 ```
 
-> **Note on omitted folders (`ebin/`, `Mnesia.*/`, `deps/`):**  
-> Compiled Erlang beam files (`ebin/`), local database transaction logs (`Mnesia.*/`), and third-party dependencies (`deps/cowboy`, `deps/jsx`) are excluded from version control to maintain a clean workspace. Dependencies are compiled automatically via `Makefile`.
+> **Note on omitted folders and dependencies (`ebin/`, `Mnesia.*/`, `deps/`):**  
+> Compiled Erlang beam files (`ebin/`) and local Mnesia database transaction logs (`Mnesia.*/`) are ignored by version control to maintain a clean repository. The third-party dependencies (`cowboy`, `jsx`) reside in `server/deps/` and can be fetched and built as described in the setup instructions below.
 
 ---
 
 ## Cluster Setup & Execution Guide
 
-### Prerequisites
+### Prerequisites & Dependencies
 - **Erlang/OTP 24+**
 - **GNU Make**
-- **NGINX** (for multi-node production deployment)
+- **Rebar3** (for compiling `jsx`)
+- **NGINX** (for multi-node production deployment and load balancing)
+
+#### External Dependencies Setup (`server/deps/`)
+The backend relies on two external libraries: **Cowboy** (HTTP/WebSocket server) and **jsx** (JSON encoding/decoding). If `server/deps/` is unpopulated or needs to be built on a fresh clone, run:
+
+```bash
+cd server/deps
+
+# 1. Fetch and compile Cowboy (automatically builds internal deps cowlib and ranch)
+git clone https://github.com/ninenines/cowboy.git cowboy
+cd cowboy && make && cd ..
+
+# 2. Fetch and compile jsx
+git clone https://github.com/talentdeficit/jsx.git jsx
+cd jsx && rebar3 compile && cd ../..
+```
 
 ### Local 3-Node Cluster Execution
 
@@ -136,6 +152,9 @@ The top-level distributed architecture is modular and partitioned into five core
    Open [`client/index.html`](file:///Users/dariobandecchi/Documents/GitHub/DSMT-BingoGame/client/index.html) directly in a web browser, or serve it via NGINX.
 
 ### Distributed Multi-Host Deployment
+
+> **Note on IP addresses:**  
+> The IP addresses listed below and in [`commands.txt`](file:///Users/dariobandecchi/Documents/GitHub/DSMT-BingoGame/commands.txt) (`10.2.1.9`, `10.2.1.10`, `10.2.1.35`, `10.2.1.36`) are **purely indicative example addresses** configured during local testing on a private lab subnet. They are not active or reachable hosts. For real deployment, substitute them with the actual private/public IPs or DNS hostnames of your machines.
 
 To run across separate physical host machines (as configured in [`commands.txt`](file:///Users/dariobandecchi/Documents/GitHub/DSMT-BingoGame/commands.txt)):
 
@@ -161,7 +180,7 @@ To run across separate physical host machines (as configured in [`commands.txt`]
    ```
 
 4. **Run NGINX Reverse Proxy (`10.2.1.36`):**
-   Apply [`nginx.conf`](file:///Users/dariobandecchi/Documents/GitHub/DSMT-BingoGame/nginx.conf) and start NGINX:
+   Apply [`nginx.conf`](file:///Users/dariobandecchi/Documents/GitHub/DSMT-BingoGame/nginx.conf) (updating upstream node addresses to match your network) and start NGINX:
    ```bash
    nginx -c /path/to/nginx.conf
    ```
