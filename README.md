@@ -5,6 +5,8 @@
 [![Cowboy](https://img.shields.io/badge/Web%20Server-Cowboy-orange.svg)](https://github.com/ninenines/cowboy)
 [![NGINX](https://img.shields.io/badge/Load%20Balancer-NGINX-green.svg)](https://nginx.org/)
 
+[Technical Presentation](presentation.pdf) | [Client Code](client/) | [Server Code](server/src/)
+
 This repository contains the design, Erlang/OTP implementation, and functional verification of a high-availability, fault-tolerant **Distributed Real-Time Multiplayer Bingo Platform** built using Mnesia DB, Cowboy Web Server, and NGINX load balancing.
 
 The project was developed for the **Distributed Systems and Middleware Technologies** course (Master of Science in Computer Engineering, **Università di Pisa**).
